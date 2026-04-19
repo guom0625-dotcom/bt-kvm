@@ -118,6 +118,17 @@ def main():
     except ValueError:
         print("숫자가 아니라 변경하지 않습니다.")
 
+    # -- capture method --
+    print("\n입력 캡처 방식:")
+    print("  1) auto   - evdev 우선, 없으면 X11 grab (기본)")
+    print("  2) evdev  - /dev/input 직접 (물리 KB/마우스 연결된 경우)")
+    print("  3) x11    - X11 grab (Barrier 사용 중인 경우)")
+    capture_map = {'1': 'auto', '2': 'evdev', '3': 'x11'}
+    current_cap = cfg.get('capture_method', 'auto')
+    cap_choice = input(f"\n선택 (현재: {current_cap}, Enter=유지): ").strip()
+    if cap_choice in capture_map:
+        cfg['capture_method'] = capture_map[cap_choice]
+
     save_config(cfg)
     print(f"\n저장 완료 → {CONFIG_PATH}")
     print("\n실행:")

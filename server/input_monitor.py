@@ -9,7 +9,19 @@ from evdev import InputDevice, list_devices, ecodes
 
 logger = logging.getLogger(__name__)
 
+# Return-edge overshoot required to trigger switch-back (pixels of relative movement)
+DEFAULT_RETURN_THRESHOLD = 80
+
+# Fallback hotkey: Scroll Lock
 SWITCH_BACK_KEY = ecodes.KEY_SCROLLLOCK
+
+# Return edge by configured edge
+RETURN_EDGE = {
+    'right':  'left',
+    'left':   'right',
+    'top':    'bottom',
+    'bottom': 'top',
+}
 
 
 def _find_keyboards_and_mice() -> tuple[list[InputDevice], list[InputDevice]]:
@@ -18,10 +30,8 @@ def _find_keyboards_and_mice() -> tuple[list[InputDevice], list[InputDevice]]:
         try:
             dev = InputDevice(path)
             caps = dev.capabilities()
-            # keyboards: have EV_KEY with letter keys
             if ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY]:
                 keyboards.append(dev)
-            # mice: have EV_REL with X axis
             elif ecodes.EV_REL in caps and ecodes.REL_X in caps[ecodes.EV_REL]:
                 mice.append(dev)
         except Exception:
@@ -39,6 +49,10 @@ class InputMonitor:
 
         self.event_callback: Optional[Callable] = None
         self.remote_mode = False
+
+        # Virtual cursor: tracks relative movement while in remote mode
+        self._virt_x = 0
+        self._virt_y = 0
 
         self._keyboards, self._mice = _find_keyboards_and_mice()
         if not self._keyboards and not self._mice:
@@ -89,18 +103,36 @@ class InputMonitor:
             return y <= t
         return False
 
+    def _past_return_edge(self) -> bool:
+        """True when virtual cursor has been pushed past the return edge."""
+        threshold = self._config.get('return_threshold', DEFAULT_RETURN_THRESHOLD)
+        edge = self._config.get('edge', 'right')
+        ret = RETURN_EDGE[edge]
+        if ret == 'left':
+            return self._virt_x < -threshold
+        if ret == 'right':
+            return self._virt_x > threshold
+        if ret == 'top':
+            return self._virt_y < -threshold
+        if ret == 'bottom':
+            return self._virt_y > threshold
+        return False
+
     def _enter_remote(self):
         if self.remote_mode:
             return
         self.remote_mode = True
+        self._virt_x = 0
+        self._virt_y = 0
         for dev in self._keyboards + self._mice:
             try:
                 dev.grab()
             except Exception as e:
                 logger.warning(f"grab {dev.path}: {e}")
-        # warp to centre so edge isn't immediately re-triggered on return
         self._warp(self._screen_w // 2, self._screen_h // 2)
-        logger.info(">>> Remote mode (Android)")
+        edge = self._config.get('edge', 'right')
+        ret = RETURN_EDGE[edge]
+        logger.info(f">>> Android mode  (마우스를 {ret}으로 밀거나 Scroll Lock으로 복귀)")
         self._on_enter_remote()
 
     def _leave_remote(self):
@@ -112,7 +144,7 @@ class InputMonitor:
                 dev.ungrab()
             except Exception:
                 pass
-        logger.info("<<< Local mode (Linux)")
+        logger.info("<<< Linux mode")
         self._on_leave_remote()
 
     def start(self):
@@ -140,7 +172,7 @@ class InputMonitor:
                         self._enter_remote()
                 except Exception as e:
                     logger.debug(f"edge loop: {e}")
-            time.sleep(0.01)  # 100 Hz polling
+            time.sleep(0.01)
 
     def _event_loop(self):
         while self._running:
@@ -164,13 +196,29 @@ class InputMonitor:
                 dev = fd_map[fd]
                 try:
                     for event in dev.read():
-                        # Scroll Lock → switch back to Linux
+                        if not self.remote_mode:
+                            break
+
+                        # Scroll Lock → 즉시 복귀 (Scroll Lock은 Android로 안 보냄)
                         if (event.type == ecodes.EV_KEY and
                                 event.code == SWITCH_BACK_KEY and
                                 event.value == 1):
                             self._leave_remote()
                             break
-                        if self.event_callback and self.remote_mode:
+
+                        # 가상 커서 위치 추적
+                        if event.type == ecodes.EV_REL:
+                            if event.code == ecodes.REL_X:
+                                self._virt_x += event.value
+                            elif event.code == ecodes.REL_Y:
+                                self._virt_y += event.value
+
+                            # 반대 경계 이탈 감지 → Linux 복귀
+                            if self._past_return_edge():
+                                self._leave_remote()
+                                break
+
+                        if self.event_callback:
                             self.event_callback(event)
                 except OSError:
                     pass

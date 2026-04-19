@@ -98,13 +98,23 @@ def main():
     except ValueError:
         print("숫자가 아니라 변경하지 않습니다.")
 
-    # -- threshold --
+    # -- edge threshold --
     thr_str = prompt(
-        "경계 감지 픽셀 거리",
+        "경계 감지 픽셀 거리 (진입 감도)",
         str(cfg.get('edge_threshold', 3))
     )
     try:
         cfg['edge_threshold'] = int(thr_str)
+    except ValueError:
+        print("숫자가 아니라 변경하지 않습니다.")
+
+    # -- return threshold --
+    ret_str = prompt(
+        "Linux 복귀 감지 픽셀 (반대 방향으로 얼마나 밀어야 복귀하는지)",
+        str(cfg.get('return_threshold', 80))
+    )
+    try:
+        cfg['return_threshold'] = int(ret_str)
     except ValueError:
         print("숫자가 아니라 변경하지 않습니다.")
 

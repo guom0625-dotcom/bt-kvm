@@ -2,5 +2,6 @@
   "device_name": "Linux KVM",
   "edge": "right",
   "edge_threshold": 3,
+  "return_threshold": 80,
   "mouse_speed_multiplier": 1.0
 }

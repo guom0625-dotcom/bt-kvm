@@ -12,6 +12,7 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from bt_hid import BluetoothHID
+from clipboard_sync import ClipboardSync
 from hid_reports import HIDState
 from input_monitor import InputMonitor
 
@@ -111,6 +112,10 @@ def main():
     logger.info("Setting up Bluetooth HID peripheral...")
     hid.setup()
 
+    clip = ClipboardSync()
+    if config.get('clipboard_sync', True):
+        clip.start()
+
     def reconnect_loop():
         while True:
             logger.info(f"Pair '{device_name}' from Android BT settings, then connect.")
@@ -143,6 +148,7 @@ def main():
     def shutdown(sig, frame):
         logger.info("Shutting down...")
         monitor.stop()
+        clip.stop()
         hid.close()
         sys.exit(0)
 

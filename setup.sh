@@ -9,7 +9,7 @@ fi
 
 echo "=== Installing dependencies ==="
 apt-get update -qq
-apt-get install -y bluetooth bluez python3-pip python3-dbus
+apt-get install -y bluetooth bluez python3-pip python3-dbus xclip
 pip3 install evdev python-xlib
 
 echo ""
@@ -43,6 +43,11 @@ fi
 systemctl daemon-reload
 systemctl restart bluetooth
 sleep 2
+
+echo ""
+echo "=== Registering RFCOMM Serial Port (clipboard channel) ==="
+# Channel 4 = clipboard sync channel used by Android app
+sdptool add --channel=4 SP && echo "RFCOMM channel 4 registered." || echo "sdptool SP failed (non-fatal)"
 
 echo ""
 echo "=== Done ==="

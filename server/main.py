@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Linux → Android Bluetooth KVM server. Must run as root."""
+import argparse
 import json
 import logging
 import os
@@ -32,12 +33,36 @@ def load_config() -> dict:
         return {}
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description='bt-kvm: Linux → Android BT KVM')
+    p.add_argument('--edge', choices=['right', 'left', 'top', 'bottom'],
+                   help='Edge that triggers switch to Android (overrides config.json)')
+    p.add_argument('--name', metavar='NAME',
+                   help='Bluetooth device name (overrides config.json)')
+    p.add_argument('--speed', type=float, metavar='N',
+                   help='Mouse speed multiplier (overrides config.json)')
+    return p.parse_args()
+
+
 def main():
     if os.geteuid() != 0:
         logger.error("Must run as root: sudo python3 server/main.py")
         sys.exit(1)
 
+    args = parse_args()
     config = load_config()
+
+    # CLI args override config.json
+    if args.edge:
+        config['edge'] = args.edge
+    if args.name:
+        config['device_name'] = args.name
+    if args.speed is not None:
+        config['mouse_speed_multiplier'] = args.speed
+
+    edge = config.get('edge', 'right')
+    logger.info(f"Edge: {edge} | Device: {config.get('device_name','Linux KVM')} "
+                f"| Speed: {config.get('mouse_speed_multiplier', 1.0)}")
     device_name = config.get('device_name', 'Linux KVM')
     speed = config.get('mouse_speed_multiplier', 1.0)
 

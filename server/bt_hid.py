@@ -99,6 +99,31 @@ class BluetoothHID:
                 logger.warning(f"{' '.join(cmd)}: {r.stderr.decode().strip()}")
 
         self._register_sdp()
+        self._purge_audio_sdp()
+
+    def _purge_audio_sdp(self):
+        """Delete HSP/HFP SDP records bluetoothd registers automatically.
+
+        A real BT keyboard only has HID (0x1124) + PnP (0x1200). Audio
+        profiles make Android MDM classify the device as a phone/PC.
+        """
+        UNWANTED = {'0x1112', '0x1108', '0x111e', '0x111f', '0x1203', '0x1101'}
+        try:
+            r = subprocess.run(['sdptool', 'browse', 'local'],
+                               capture_output=True, text=True, timeout=5)
+            handle = None
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if 'RecHandle:' in line:
+                    handle = line.split(':')[-1].strip()
+                elif handle and any(u in line for u in UNWANTED):
+                    r2 = subprocess.run(['sdptool', 'del', handle],
+                                        capture_output=True, timeout=5)
+                    if r2.returncode == 0:
+                        logger.info(f"Removed audio/phone SDP record {handle}")
+                    handle = None
+        except Exception as e:
+            logger.debug(f"SDP purge: {e}")
 
     def _spoof_bdaddr(self):
         """Spoof BD address OUI to Logitech (00:07:61) so MDM sees a HID peripheral."""

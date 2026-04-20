@@ -54,7 +54,8 @@ fi
 # ------------------------------------------------------------------ #
 echo "=== Installing dependencies ==="
 apt-get update -qq
-apt-get install -y bluetooth bluez python3-pip python3-dbus xclip
+apt-get install -y bluetooth bluez python3-pip python3-dbus xclip python3-dev
+pip3 install --upgrade pip setuptools wheel
 pip3 install evdev python-xlib
 
 echo ""

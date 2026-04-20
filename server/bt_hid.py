@@ -118,8 +118,16 @@ class BluetoothHID:
                 if r.returncode == 0:
                     logger.info("SDP HID record registered.")
                     return
-            logger.error(f"sdptool failed: {r.stderr.decode().strip()}")
-            logger.error("Continuing anyway - Android may still connect")
+            # XML not supported in this sdptool build — register generic HID profile.
+            # The report descriptor won't be in SDP but Android can still connect
+            # via device class (0x002540) and our L2CAP sockets.
+            logger.warning("sdptool --xml unsupported; falling back to generic HID SDP")
+            r = subprocess.run(['sdptool', 'add', 'HID'], capture_output=True)
+            if r.returncode == 0:
+                logger.info("Generic HID SDP record registered.")
+            else:
+                logger.error(f"sdptool HID fallback failed: {r.stderr.decode().strip()}")
+                logger.error("Continuing without SDP — Android may still connect")
         finally:
             os.unlink(xml_path)
 

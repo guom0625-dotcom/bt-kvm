@@ -138,7 +138,7 @@ class BluetoothHID:
             logger.info(f"SDP HID record registered via D-Bus (handle=0x{int(handle):x})")
             return True
         except Exception as e:
-            logger.debug(f"D-Bus SDP: {e}")
+            logger.warning(f"D-Bus SDP failed: {e}")
             return False
 
     @staticmethod

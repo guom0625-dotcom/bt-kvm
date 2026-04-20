@@ -76,7 +76,7 @@ mkdir -p "$(dirname "$OVERRIDE")"
 cat > "$OVERRIDE" << 'EOF'
 [Service]
 ExecStart=
-ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input,a2dp,avrcp,network,sap,hog,gap,gatt,hostname,wiimote
+ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input
 EOF
 echo "Set bluetoothd: --compat --noplugin=pnat,input"
 

@@ -37,8 +37,8 @@ class X11GrabCapture:
         self._d  = display_obj
         self._root = root
         self._grabbed = False
-        self._warp_x = 0   # cursor is re-warped here on every motion event
-        self._warp_y = 0   # so the Linux cursor stays frozen while in remote
+        self._prev_x = 0
+        self._prev_y = 0
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()   # serializes all Xlib calls
         self._thread = threading.Thread(target=self._event_loop,
@@ -51,13 +51,12 @@ class X11GrabCapture:
     def grab(self, warp_x: int = None, warp_y: int = None):
         with self._lock:
             if warp_x is not None and warp_y is not None:
-                # Caller already warped cursor here; use as anchor.
-                self._warp_x = warp_x
-                self._warp_y = warp_y
+                self._prev_x = warp_x
+                self._prev_y = warp_y
             else:
                 p = self._root.query_pointer()
-                self._warp_x = p.root_x
-                self._warp_y = p.root_y
+                self._prev_x = p.root_x
+                self._prev_y = p.root_y
             self._root.grab_keyboard(
                 True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime
             )
@@ -69,6 +68,7 @@ class X11GrabCapture:
             )
             self._d.flush()
             self._grabbed = True
+            self._set_cursor_visible(False)
         logger.debug("X11 grab active")
 
     def ungrab(self):
@@ -77,6 +77,7 @@ class X11GrabCapture:
             self._d.ungrab_keyboard(X.CurrentTime)
             self._d.ungrab_pointer(X.CurrentTime)
             self._d.flush()
+            self._set_cursor_visible(True)
         # drain leftover events
         while not self._q.empty():
             try:
@@ -101,6 +102,17 @@ class X11GrabCapture:
 
     # ------------------------------------------------------------------ #
     # Internal
+
+    def _set_cursor_visible(self, visible: bool):
+        try:
+            from Xlib.ext import xfixes
+            if visible:
+                xfixes.show_cursor(self._d, self._root)
+            else:
+                xfixes.hide_cursor(self._d, self._root)
+            self._d.flush()
+        except Exception:
+            pass
 
     def _event_loop(self):
         """Non-blocking X11 event reader: select + lock to serialize Xlib calls."""
@@ -140,12 +152,9 @@ class X11GrabCapture:
                 self._q.put(('btn', _BTN_MAP[ev.detail], 0))
 
         elif t == X.MotionNotify:
-            dx = ev.root_x - self._warp_x
-            dy = ev.root_y - self._warp_y
+            dx = ev.root_x - self._prev_x
+            dy = ev.root_y - self._prev_y
+            self._prev_x = ev.root_x
+            self._prev_y = ev.root_y
             if dx or dy:
-                # Re-center cursor so Linux screen stays frozen.
-                # The warp generates another MotionNotify with dx=dy=0,
-                # which the `if dx or dy` guard above discards.
-                self._root.warp_pointer(self._warp_x, self._warp_y)
-                self._d.flush()
                 self._q.put(('move', dx, dy))

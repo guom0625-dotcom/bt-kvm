@@ -10,6 +10,7 @@ import socket
 import subprocess
 import threading
 import time
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ RFCOMM_CHANNEL = 4          # must match Android app constant
 POLL_INTERVAL  = 0.5        # seconds between clipboard polls on Linux
 
 
-def _clip_get() -> str | None:
+def _clip_get() -> Optional[str]:
     try:
         r = subprocess.run(
             ['xclip', '-selection', 'clipboard', '-o'],

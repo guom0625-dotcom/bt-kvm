@@ -1,4 +1,5 @@
 """HID report descriptor and state management."""
+from __future__ import annotations
 from evdev import ecodes
 
 # HID report descriptor: keyboard (Report ID 1) + mouse (Report ID 2)

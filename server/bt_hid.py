@@ -85,6 +85,7 @@ class BluetoothHID:
     def setup(self):
         """Configure BT adapter as HID peripheral and register SDP record."""
         logger.info("Configuring Bluetooth adapter...")
+        self._spoof_bdaddr()
         cmds = [
             ['hciconfig', 'hci0', 'up'],
             ['hciconfig', 'hci0', 'class', '0x002540'],
@@ -97,6 +98,45 @@ class BluetoothHID:
                 logger.warning(f"{' '.join(cmd)}: {r.stderr.decode().strip()}")
 
         self._register_sdp()
+
+    def _spoof_bdaddr(self):
+        """Spoof BD address OUI to Logitech (00:07:61) so MDM sees a HID peripheral."""
+        original = self._get_local_bdaddr()
+        if not original:
+            return
+        suffix   = ':'.join(original.split(':')[3:])
+        spoofed  = f'00:07:61:{suffix}'
+
+        # btmgmt approach (works on most adapters)
+        r = subprocess.run(
+            ['btmgmt', '--index', '0', 'power', 'off'],
+            capture_output=True, timeout=5,
+        )
+        r = subprocess.run(
+            ['btmgmt', '--index', '0', 'public-addr', spoofed],
+            capture_output=True, text=True, timeout=5,
+        )
+        subprocess.run(
+            ['btmgmt', '--index', '0', 'power', 'on'],
+            capture_output=True, timeout=5,
+        )
+        if r.returncode == 0:
+            logger.info(f"BD address spoofed: {original} → {spoofed}  (Logitech OUI)")
+            return
+
+        # Fallback: bdaddr tool (CSR chips)
+        subprocess.run(['hciconfig', 'hci0', 'down'], capture_output=True)
+        r = subprocess.run(
+            ['bdaddr', '-i', 'hci0', spoofed],
+            capture_output=True, text=True, timeout=5,
+        )
+        subprocess.run(['hciconfig', 'hci0', 'up'], capture_output=True)
+        if r.returncode == 0:
+            logger.info(f"BD address spoofed via bdaddr: {original} → {spoofed}")
+        else:
+            logger.warning(
+                f"BD address spoofing failed (adapter may not support it): {r.stderr.strip()}"
+            )
 
     def _register_sdp(self):
         xml = _build_sdp_xml(self.device_name)

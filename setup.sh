@@ -54,9 +54,7 @@ fi
 # ------------------------------------------------------------------ #
 echo "=== Installing dependencies ==="
 apt-get update -qq
-apt-get install -y bluetooth bluez python3-pip python3-dbus python3-gi xclip python3-dev
-pip3 install --upgrade pip setuptools wheel
-pip3 install evdev python-xlib
+apt-get install -y bluetooth bluez python3-dbus python3-gi python3-evdev python3-xlib xclip
 
 echo ""
 echo "=== Configuring BlueZ for HID compatibility ==="

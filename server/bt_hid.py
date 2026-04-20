@@ -100,36 +100,46 @@ class BluetoothHID:
 
     def _register_sdp(self):
         xml = _build_sdp_xml(self.device_name)
+
+        # Method 1: D-Bus org.bluez.Service.AddRecord (compat mode, most reliable)
+        if self._register_sdp_dbus(xml):
+            return
+
+        # Method 2: sdptool --xml (syntax varies by bluez build)
         with tempfile.NamedTemporaryFile(mode='w', suffix='.xml',
                                          delete=False) as f:
             f.write(xml)
             xml_path = f.name
-
-        # Try multiple argument styles — sdptool --xml syntax varies by bluez version
-        candidates = [
-            ['sdptool', 'add', '--handle=0x00010001', '--xml', xml_path],
-            ['sdptool', 'add', '--xml', xml_path],
-            ['sdptool', 'add', '--handle=0x00010001', f'--xml={xml_path}'],
-            ['sdptool', 'add', f'--xml={xml_path}'],
-        ]
         try:
-            for cmd in candidates:
+            for cmd in [
+                ['sdptool', 'add', '--handle=0x00010001', '--xml', xml_path],
+                ['sdptool', 'add', '--xml', xml_path],
+                ['sdptool', 'add', f'--xml={xml_path}'],
+            ]:
                 r = subprocess.run(cmd, capture_output=True)
                 if r.returncode == 0:
-                    logger.info("SDP HID record registered.")
+                    logger.info("SDP HID record registered via sdptool.")
                     return
-            # XML not supported in this sdptool build — register generic HID profile.
-            # The report descriptor won't be in SDP but Android can still connect
-            # via device class (0x002540) and our L2CAP sockets.
-            logger.warning("sdptool --xml unsupported; falling back to generic HID SDP")
-            r = subprocess.run(['sdptool', 'add', 'HID'], capture_output=True)
-            if r.returncode == 0:
-                logger.info("Generic HID SDP record registered.")
-            else:
-                logger.error(f"sdptool HID fallback failed: {r.stderr.decode().strip()}")
-                logger.error("Continuing without SDP — Android may still connect")
         finally:
             os.unlink(xml_path)
+
+        logger.error("All SDP registration methods failed — Android MDM may block connection")
+
+    def _register_sdp_dbus(self, xml: str) -> bool:
+        """Register SDP record via BlueZ D-Bus compat API (org.bluez.Service)."""
+        try:
+            import dbus
+            bus = dbus.SystemBus()
+            service = dbus.Interface(
+                bus.get_object('org.bluez', '/org/bluez/hci0'),
+                'org.bluez.Service'
+            )
+            handle = service.AddRecord(xml)
+            logger.info(f"SDP HID record registered via D-Bus (handle=0x{int(handle):x})")
+            return True
+        except Exception as e:
+            logger.debug(f"D-Bus SDP: {e}")
+            return False
 
     @staticmethod
     def _get_local_bdaddr() -> str:

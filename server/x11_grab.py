@@ -5,6 +5,7 @@ X11 keycode = evdev keycode + 8, so we can reuse hid_reports KEY_MAP directly.
 """
 import logging
 import queue
+import select
 import threading
 import time
 
@@ -39,6 +40,7 @@ class X11GrabCapture:
         self._prev_x = 0
         self._prev_y = 0
         self._q: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()   # serializes all Xlib calls
         self._thread = threading.Thread(target=self._event_loop,
                                         daemon=True, name="x11-grab-reader")
         self._thread.start()
@@ -47,28 +49,29 @@ class X11GrabCapture:
     # Public API
 
     def grab(self):
-        p = self._root.query_pointer()
-        self._prev_x = p.root_x
-        self._prev_y = p.root_y
-
-        self._root.grab_keyboard(
-            True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime
-        )
-        self._root.grab_pointer(
-            True,
-            X.PointerMotionMask | X.ButtonPressMask | X.ButtonReleaseMask,
-            X.GrabModeAsync, X.GrabModeAsync,
-            X.NONE, X.NONE, X.CurrentTime,
-        )
-        self._d.flush()
-        self._grabbed = True
+        with self._lock:
+            p = self._root.query_pointer()
+            self._prev_x = p.root_x
+            self._prev_y = p.root_y
+            self._root.grab_keyboard(
+                True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime
+            )
+            self._root.grab_pointer(
+                True,
+                X.PointerMotionMask | X.ButtonPressMask | X.ButtonReleaseMask,
+                X.GrabModeAsync, X.GrabModeAsync,
+                X.NONE, X.NONE, X.CurrentTime,
+            )
+            self._d.flush()
+            self._grabbed = True
         logger.debug("X11 grab active")
 
     def ungrab(self):
-        self._grabbed = False
-        self._d.ungrab_keyboard(X.CurrentTime)
-        self._d.ungrab_pointer(X.CurrentTime)
-        self._d.flush()
+        with self._lock:
+            self._grabbed = False
+            self._d.ungrab_keyboard(X.CurrentTime)
+            self._d.ungrab_pointer(X.CurrentTime)
+            self._d.flush()
         # drain leftover events
         while not self._q.empty():
             try:
@@ -95,19 +98,21 @@ class X11GrabCapture:
     # Internal
 
     def _event_loop(self):
-        """Blocking X11 event reader in its own thread."""
+        """Non-blocking X11 event reader: select + lock to serialize Xlib calls."""
+        fd = self._d.fileno()
         while True:
             try:
-                ev = self._d.next_event()
+                readable, _, _ = select.select([fd], [], [], 0.05)
+                if not readable:
+                    continue
+                with self._lock:
+                    while self._d.pending_events():
+                        ev = self._d.next_event()
+                        if self._grabbed:
+                            self._dispatch(ev)
             except Exception as e:
                 logger.debug(f"x11 event_loop: {e}")
                 time.sleep(0.01)
-                continue
-
-            if not self._grabbed:
-                continue
-
-            self._dispatch(ev)
 
     def _dispatch(self, ev):
         t = ev.type

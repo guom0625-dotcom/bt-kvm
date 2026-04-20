@@ -69,6 +69,7 @@ class InputMonitor:
     def _init_x11(self):
         from Xlib import display as xdisp
         try:
+            # Grab/event display — shared with X11GrabCapture
             d = xdisp.Display()
             screen = d.screen()
             self._display = d
@@ -76,6 +77,11 @@ class InputMonitor:
             self._screen_w = screen.width_in_pixels
             self._screen_h = screen.height_in_pixels
             logger.info(f"X11 screen: {self._screen_w}x{self._screen_h}")
+            # Separate connection for edge polling so query_pointer() calls
+            # never race with the grab display's event loop.
+            d2 = xdisp.Display()
+            self._poll_root    = d2.screen().root
+            self._poll_display = d2
         except Exception as e:
             raise RuntimeError(f"X11 init failed: {e}. Is DISPLAY set?")
 
@@ -106,12 +112,12 @@ class InputMonitor:
     # X11 helpers
 
     def _mouse_pos(self):
-        p = self._root.query_pointer()
+        p = self._poll_root.query_pointer()
         return p.root_x, p.root_y
 
     def _warp(self, x, y):
-        self._root.warp_pointer(x, y)
-        self._display.flush()
+        self._poll_root.warp_pointer(x, y)
+        self._poll_display.flush()
 
     def _at_edge(self, x, y) -> bool:
         t = self._config.get('edge_threshold', 3)

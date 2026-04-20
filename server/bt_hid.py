@@ -3,6 +3,7 @@ import logging
 import socket
 import subprocess
 import tempfile
+import threading
 import os
 
 from hid_reports import HID_DESCRIPTOR
@@ -131,9 +132,32 @@ class BluetoothHID:
         logger.info("Waiting for Android connection "
                     f"(pair '{self.device_name}' in Android BT settings)...")
 
-        self._ctrl_client, ctrl_addr = self._ctrl_server.accept()
+        # Accept both channels concurrently — Android may connect PSM 19
+        # before PSM 17, so sequential accept() can deadlock.
+        results: dict = {}
+        errs: dict = {}
+
+        def _accept(server, key):
+            try:
+                results[key] = server.accept()
+            except OSError as e:
+                errs[key] = e
+
+        t_ctrl = threading.Thread(target=_accept,
+                                   args=(self._ctrl_server, 'ctrl'), daemon=True)
+        t_intr = threading.Thread(target=_accept,
+                                   args=(self._intr_server, 'intr'), daemon=True)
+        t_ctrl.start()
+        t_intr.start()
+        t_ctrl.join()
+        t_intr.join()
+
+        if errs:
+            raise OSError(f"L2CAP accept failed: {errs}")
+
+        self._ctrl_client, ctrl_addr = results['ctrl']
+        self._intr_client, intr_addr = results['intr']
         logger.info(f"Control channel: {ctrl_addr[0]}")
-        self._intr_client, intr_addr = self._intr_server.accept()
         logger.info(f"Interrupt channel: {intr_addr[0]}")
         self.connected = True
 

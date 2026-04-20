@@ -50,6 +50,7 @@ class InputMonitor:
         self.remote_mode = False
         self._virt_x = 0
         self._virt_y = 0
+        self._ignore_motion_until = 0.0
 
         self._display = None
         self._root = None
@@ -185,7 +186,12 @@ class InputMonitor:
         else:
             self._backend['capture'].grab()
 
-        self._warp(self._screen_w // 2, self._screen_h // 2)
+        # Warp to primary monitor center, not virtual desktop center.
+        # Then suppress motion events briefly so the warp itself doesn't
+        # immediately trigger the return-edge check.
+        self._warp(self._mon_x + self._mon_w // 2,
+                   self._mon_y + self._mon_h // 2)
+        self._ignore_motion_until = time.time() + 0.25
         ret = RETURN_EDGE[self._config.get('edge', 'right')]
         logger.info(f">>> Android  (마우스를 {ret}으로 밀거나 Scroll Lock 복귀)")
         self._on_enter_remote()
@@ -313,6 +319,8 @@ class InputMonitor:
 
                 elif kind == 'move':
                     _, dx, dy = evt
+                    if time.time() < self._ignore_motion_until:
+                        continue  # discard warp-induced motion after entering remote
                     self._virt_x += dx
                     self._virt_y += dy
                     if self._past_return_edge():

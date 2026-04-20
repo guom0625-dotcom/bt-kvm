@@ -1,10 +1,11 @@
 """Bluetooth HID peripheral: Linux acts as BT keyboard+mouse for Android."""
 import logging
+import os
 import socket
 import subprocess
 import tempfile
 import threading
-import os
+import time
 
 from hid_reports import HID_DESCRIPTOR
 

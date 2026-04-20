@@ -136,6 +136,12 @@ class InputMonitor:
                 ev = self._poll_display.next_event()
                 if ev.type == X.KeyPress:
                     if ev.detail - 8 == self._toggle_keycode:
+                        # The passive XGrabKey converted to an active grab on
+                        # _poll_display.  Release it now so XGrabKeyboard on
+                        # _display (a different X11 client) doesn't get
+                        # AlreadyGrabbed.
+                        self._poll_display.ungrab_keyboard(X.CurrentTime)
+                        self._poll_display.flush()
                         if self.remote_mode:
                             self._leave_remote()
                         else:

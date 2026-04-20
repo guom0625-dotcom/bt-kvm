@@ -6,7 +6,9 @@ capture_method:
   "auto"   - tries evdev first; falls back to x11 if no devices found
 """
 import logging
+import re
 import select
+import subprocess
 import threading
 import time
 from typing import Callable, Optional
@@ -76,7 +78,7 @@ class InputMonitor:
             self._root = screen.root
             self._screen_w = screen.width_in_pixels
             self._screen_h = screen.height_in_pixels
-            logger.info(f"X11 screen: {self._screen_w}x{self._screen_h}")
+            logger.info(f"X11 virtual desktop: {self._screen_w}x{self._screen_h}")
             # Separate connection for edge polling so query_pointer() calls
             # never race with the grab display's event loop.
             d2 = xdisp.Display()
@@ -84,6 +86,33 @@ class InputMonitor:
             self._poll_display = d2
         except Exception as e:
             raise RuntimeError(f"X11 init failed: {e}. Is DISPLAY set?")
+
+        # Use primary monitor bounds for edge detection so Barrier's
+        # combined virtual desktop doesn't inflate the threshold.
+        bounds = self._get_primary_monitor_bounds()
+        if bounds:
+            ox, oy, ow, oh = bounds
+            logger.info(f"Edge detection monitor: {ow}x{oh} at ({ox},{oy})")
+        else:
+            ox, oy, ow, oh = 0, 0, self._screen_w, self._screen_h
+            logger.info("xrandr primary not found — using full virtual desktop")
+        self._mon_x, self._mon_y = ox, oy
+        self._mon_w, self._mon_h = ow, oh
+
+    @staticmethod
+    def _get_primary_monitor_bounds():
+        """Return (x, y, w, h) of the primary monitor via xrandr."""
+        try:
+            r = subprocess.run(['xrandr'], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                if ' primary ' in line:
+                    m = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+                    if m:
+                        return (int(m.group(3)), int(m.group(4)),
+                                int(m.group(1)), int(m.group(2)))
+        except Exception:
+            pass
+        return None  # caller falls back to virtual desktop size
 
     def _choose_backend(self, method: str):
         if method == 'x11':
@@ -122,10 +151,10 @@ class InputMonitor:
     def _at_edge(self, x, y) -> bool:
         t = self._config.get('edge_threshold', 3)
         edge = self._config.get('edge', 'right')
-        if edge == 'right':  return x >= self._screen_w - t
-        if edge == 'left':   return x <= t
-        if edge == 'bottom': return y >= self._screen_h - t
-        if edge == 'top':    return y <= t
+        if edge == 'right':  return x >= self._mon_x + self._mon_w - t
+        if edge == 'left':   return x <= self._mon_x + t
+        if edge == 'bottom': return y >= self._mon_y + self._mon_h - t
+        if edge == 'top':    return y <= self._mon_y + t
         return False
 
     def _past_return_edge(self) -> bool:

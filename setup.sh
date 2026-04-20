@@ -74,21 +74,23 @@ mkdir -p "$(dirname "$OVERRIDE")"
 cat > "$OVERRIDE" << 'EOF'
 [Service]
 ExecStart=
-ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input,a2dp,avrcp,network,sap
+ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input,a2dp,avrcp,network,sap,hfp_ag,hfp_hf,hsp_ag,hsp_hs
 EOF
 echo "Set bluetoothd: --compat --noplugin=pnat,input"
 
 systemctl daemon-reload
 systemctl restart bluetooth
-# Stop obexd — it registers File Transfer, Phone Book, Message Access SDP records
-# that make the device look like a phone/PC to Android MDM policies.
-systemctl stop obex 2>/dev/null || true
-systemctl disable obex 2>/dev/null || true
+# Kill obexd — registers File Transfer, Phonebook, Message Access SDP records
+# that make the device look like a PC/phone to Android MDM policies.
+pkill -x obexd 2>/dev/null || true
+systemctl stop obexd bluetooth-obexd obex 2>/dev/null || true
+systemctl disable obexd bluetooth-obexd obex 2>/dev/null || true
+# Prevent D-Bus auto-activation of obexd
+OBEX_DBUS="/usr/share/dbus-1/services/org.bluez.obex.service"
+if [ -f "$OBEX_DBUS" ]; then
+    ln -sf /dev/null "$OBEX_DBUS" && echo "obexd D-Bus activation disabled."
+fi
 sleep 2
-
-echo ""
-echo "=== Registering RFCOMM Serial Port (clipboard channel) ==="
-sdptool add --channel=4 SP && echo "RFCOMM channel 4 registered." || echo "sdptool SP failed (non-fatal)"
 
 echo ""
 echo "=== Done ==="

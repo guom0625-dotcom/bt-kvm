@@ -37,8 +37,8 @@ class X11GrabCapture:
         self._d  = display_obj
         self._root = root
         self._grabbed = False
-        self._prev_x = 0
-        self._prev_y = 0
+        self._warp_x = 0   # cursor is re-warped here on every motion event
+        self._warp_y = 0   # so the Linux cursor stays frozen while in remote
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()   # serializes all Xlib calls
         self._thread = threading.Thread(target=self._event_loop,
@@ -51,13 +51,16 @@ class X11GrabCapture:
     def grab(self):
         with self._lock:
             p = self._root.query_pointer()
-            self._prev_x = p.root_x
-            self._prev_y = p.root_y
+            # Anchor point: cursor stays here visually while in remote mode.
+            # _enter_remote() already warped the cursor to monitor center
+            # before calling grab(), so this captures that position.
+            self._warp_x = p.root_x
+            self._warp_y = p.root_y
             self._root.grab_keyboard(
                 True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime
             )
             self._root.grab_pointer(
-                True,
+                False,  # owner_events=False: all events go only to us
                 X.PointerMotionMask | X.ButtonPressMask | X.ButtonReleaseMask,
                 X.GrabModeAsync, X.GrabModeAsync,
                 X.NONE, X.NONE, X.CurrentTime,
@@ -135,9 +138,12 @@ class X11GrabCapture:
                 self._q.put(('btn', _BTN_MAP[ev.detail], 0))
 
         elif t == X.MotionNotify:
-            dx = ev.root_x - self._prev_x
-            dy = ev.root_y - self._prev_y
-            self._prev_x = ev.root_x
-            self._prev_y = ev.root_y
+            dx = ev.root_x - self._warp_x
+            dy = ev.root_y - self._warp_y
             if dx or dy:
+                # Re-center cursor so Linux screen stays frozen.
+                # The warp generates another MotionNotify with dx=dy=0,
+                # which the `if dx or dy` guard above discards.
+                self._root.warp_pointer(self._warp_x, self._warp_y)
+                self._d.flush()
                 self._q.put(('move', dx, dy))

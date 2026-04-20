@@ -73,14 +73,12 @@ else
 fi
 
 mkdir -p "$(dirname "$OVERRIDE")"
-if ! grep -q "noplugin=pnat" "$OVERRIDE" 2>/dev/null; then
-    cat > "$OVERRIDE" << 'EOF'
+cat > "$OVERRIDE" << 'EOF'
 [Service]
 ExecStart=
 ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input
 EOF
-    echo "Added --compat --noplugin=pnat to bluetoothd startup."
-fi
+echo "Set bluetoothd: --compat --noplugin=pnat,input"
 
 systemctl daemon-reload
 systemctl restart bluetooth

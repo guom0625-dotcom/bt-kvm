@@ -120,6 +120,11 @@ class BluetoothHID:
             ['btmgmt', '--index', '0', 'power', 'on'],
             capture_output=True, timeout=5,
         )
+        time.sleep(1)  # wait for bluetoothd to re-init before setting name
+        subprocess.run(
+            ['btmgmt', '--index', '0', 'name', self.device_name],
+            capture_output=True, timeout=5,
+        )
         if r.returncode == 0:
             logger.info(f"BD address spoofed: {original} → {spoofed}  (Logitech OUI)")
             return

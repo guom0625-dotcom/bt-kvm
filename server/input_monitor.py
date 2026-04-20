@@ -193,7 +193,10 @@ class InputMonitor:
             # suppression still go through X11 grab.
             _, mice = _find_keyboards_and_mice()
             if mice:
-                cap = self._make_x11_backend(suppress_mouse=True)
+                # Physical mice are grabbed via evdev, so only Barrier XTEST
+                # events reach X11.  suppress_mouse=False forwards those Barrier
+                # cursor deltas to Android (no double-movement risk).
+                cap = self._make_x11_backend(suppress_mouse=False)
                 logger.info(f"Capture backend: mixed "
                             f"(X11 keyboard + {len(mice)} evdev mouse/mice)")
                 return {'type': 'mixed', 'capture': cap['capture'], 'mice': mice}
@@ -391,7 +394,8 @@ class InputMonitor:
                                 self._virt_x += event.value
                             elif event.code == ecodes.REL_Y:
                                 self._virt_y += event.value
-                            if self._past_return_edge():
+                            if (self._config.get('mouse_return', True) and
+                                    self._past_return_edge()):
                                 self._leave_remote()
                                 break
                         if self.event_callback:
@@ -425,7 +429,8 @@ class InputMonitor:
                                 self._virt_x += event.value
                             elif event.code == ecodes.REL_Y:
                                 self._virt_y += event.value
-                            if self._past_return_edge():
+                            if (self._config.get('mouse_return', True) and
+                                    self._past_return_edge()):
                                 self._leave_remote()
                                 break
                         if self.event_callback:
@@ -470,7 +475,8 @@ class InputMonitor:
                         continue  # discard warp-induced motion after entering remote
                     self._virt_x += dx
                     self._virt_y += dy
-                    if self._past_return_edge():
+                    if (self._config.get('mouse_return', True) and
+                            self._past_return_edge()):
                         self._leave_remote()
                         break
                     if self.event_callback:

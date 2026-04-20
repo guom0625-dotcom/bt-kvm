@@ -6,5 +6,6 @@
   "mouse_speed_multiplier": 1.0,
   "capture_method": "x11",
   "clipboard_sync": true,
-  "toggle_key": "KEY_PAUSE"
+  "toggle_key": "KEY_PAUSE",
+  "mouse_return": false
 }

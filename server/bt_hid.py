@@ -89,7 +89,6 @@ class BluetoothHID:
         self._spoof_bdaddr()
         cmds = [
             ['hciconfig', 'hci0', 'up'],
-            ['hciconfig', 'hci0', 'class', '0x002540'],
             ['hciconfig', 'hci0', 'name', self.device_name],
             ['hciconfig', 'hci0', 'piscan'],
         ]
@@ -100,6 +99,14 @@ class BluetoothHID:
 
         self._register_sdp()
         self._purge_audio_sdp()
+
+        # Set CoD after SDP registration — ProfileManager1 may reset it.
+        r = subprocess.run(['hciconfig', 'hci0', 'class', '0x002540'],
+                           capture_output=True)
+        if r.returncode != 0:
+            logger.warning(f"hciconfig class: {r.stderr.decode().strip()}")
+        else:
+            logger.info("CoD set: 0x002540 (Peripheral / Keyboard)")
 
     def _purge_audio_sdp(self):
         """Delete HSP/HFP SDP records bluetoothd registers automatically.
@@ -115,6 +122,7 @@ class BluetoothHID:
             '0x111f', '0000111f',  # Handsfree Audio Gateway
             '0x1203', '00001203',  # Generic Audio
             '0x1101', '00001101',  # Serial Port
+            '0x1200', '00001200',  # PnP Information (USB VID flags as PC vendor)
         }
         try:
             r = subprocess.run(['sdptool', 'browse', 'local'],

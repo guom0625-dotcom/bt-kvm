@@ -13,12 +13,19 @@ fi
 
 BTCONF="/etc/bluetooth/main.conf"
 OVERRIDE="/etc/systemd/system/bluetooth.service.d/override.conf"
+DEVICE_NAME=$(python3 -c "import json; print(json.load(open('config.json')).get('device_name','Linux KVM'))" 2>/dev/null || echo "Linux KVM")
 
 # ------------------------------------------------------------------ #
 # restore
 # ------------------------------------------------------------------ #
 if [ "${1}" = "restore" ]; then
     echo "=== Restoring BlueZ config ==="
+
+    # Remove Name line added by setup
+    if grep -q "^Name = " "$BTCONF" 2>/dev/null; then
+        sed -i "/^Name = /d" "$BTCONF"
+        echo "Removed Name from $BTCONF"
+    fi
 
     # Remove [Policy] CompatibilityMode block added by setup
     if grep -q "CompatibilityMode" "$BTCONF" 2>/dev/null; then
@@ -68,6 +75,15 @@ EOF
     echo "Added CompatibilityMode=true to $BTCONF"
 else
     echo "CompatibilityMode already set."
+fi
+
+# Fix device name in bluetoothd config to prevent hostname from leaking
+if ! grep -q "^Name = " "$BTCONF" 2>/dev/null; then
+    sed -i "/^\[General\]/a Name = $DEVICE_NAME" "$BTCONF"
+    echo "Set device name '$DEVICE_NAME' in $BTCONF"
+else
+    sed -i "s/^Name = .*/Name = $DEVICE_NAME/" "$BTCONF"
+    echo "Updated device name to '$DEVICE_NAME' in $BTCONF"
 fi
 
 mkdir -p "$(dirname "$OVERRIDE")"

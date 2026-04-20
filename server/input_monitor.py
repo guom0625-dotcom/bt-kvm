@@ -88,17 +88,27 @@ class InputMonitor:
         except Exception as e:
             raise RuntimeError(f"X11 init failed: {e}. Is DISPLAY set?")
 
-        # Use primary monitor bounds for edge detection so Barrier's
-        # combined virtual desktop doesn't inflate the threshold.
+        # Primary monitor bounds — used for warp target (center of screen).
         bounds = self._get_primary_monitor_bounds()
         if bounds:
             ox, oy, ow, oh = bounds
-            logger.info(f"Edge detection monitor: {ow}x{oh} at ({ox},{oy})")
         else:
             ox, oy, ow, oh = 0, 0, self._screen_w, self._screen_h
-            logger.info("xrandr primary not found — using full virtual desktop")
         self._mon_x, self._mon_y = ox, oy
         self._mon_w, self._mon_h = ow, oh
+
+        # Physical desktop bounds — extreme edges of ALL connected monitors.
+        # Used for edge detection so multi-monitor layouts work correctly
+        # (e.g. left edge = leftmost pixel of leftmost monitor, not primary).
+        db = self._get_physical_desktop_bounds()
+        if db:
+            self._desk_x0, self._desk_y0, self._desk_x1, self._desk_y1 = db
+        else:
+            self._desk_x0, self._desk_y0 = 0, 0
+            self._desk_x1, self._desk_y1 = self._screen_w, self._screen_h
+        logger.info(f"Physical desktop: ({self._desk_x0},{self._desk_y0})"
+                    f"–({self._desk_x1},{self._desk_y1})"
+                    f"  warp target: {ow}x{oh} at ({ox},{oy})")
 
     @staticmethod
     def _get_primary_monitor_bounds():
@@ -113,7 +123,29 @@ class InputMonitor:
                                 int(m.group(1)), int(m.group(2)))
         except Exception:
             pass
-        return None  # caller falls back to virtual desktop size
+        return None
+
+    @staticmethod
+    def _get_physical_desktop_bounds():
+        """Return (min_x, min_y, max_x, max_y) spanning all connected monitors."""
+        try:
+            r = subprocess.run(['xrandr'], capture_output=True, text=True, timeout=3)
+            monitors = []
+            for line in r.stdout.splitlines():
+                if ' connected' in line:
+                    m = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+                    if m:
+                        w, h, x, y = (int(m.group(1)), int(m.group(2)),
+                                      int(m.group(3)), int(m.group(4)))
+                        monitors.append((x, y, w, h))
+            if monitors:
+                return (min(x       for x, y, w, h in monitors),
+                        min(y       for x, y, w, h in monitors),
+                        max(x + w   for x, y, w, h in monitors),
+                        max(y + h   for x, y, w, h in monitors))
+        except Exception:
+            pass
+        return None
 
     def _choose_backend(self, method: str):
         if method == 'x11':
@@ -152,10 +184,10 @@ class InputMonitor:
     def _at_edge(self, x, y) -> bool:
         t = self._config.get('edge_threshold', 3)
         edge = self._config.get('edge', 'right')
-        if edge == 'right':  return x >= self._mon_x + self._mon_w - t
-        if edge == 'left':   return x <= self._mon_x + t
-        if edge == 'bottom': return y >= self._mon_y + self._mon_h - t
-        if edge == 'top':    return y <= self._mon_y + t
+        if edge == 'right':  return x >= self._desk_x1 - t
+        if edge == 'left':   return x <= self._desk_x0 + t
+        if edge == 'bottom': return y >= self._desk_y1 - t
+        if edge == 'top':    return y <= self._desk_y0 + t
         return False
 
     def _past_return_edge(self) -> bool:

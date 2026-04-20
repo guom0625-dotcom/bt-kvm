@@ -101,11 +101,15 @@ class BluetoothHID:
     def _register_sdp(self):
         xml = _build_sdp_xml(self.device_name)
 
-        # Method 1: D-Bus org.bluez.Service.AddRecord (compat mode, most reliable)
-        if self._register_sdp_dbus(xml):
+        # Method 1: ProfileManager1 (BlueZ 5.x standard, preferred)
+        if self._register_sdp_profile_manager(xml):
             return
 
-        # Method 2: sdptool --xml (syntax varies by bluez build)
+        # Method 2: org.bluez.Service.AddRecord (compat legacy)
+        if self._register_sdp_compat(xml):
+            return
+
+        # Method 3: sdptool --xml (syntax varies by bluez build)
         with tempfile.NamedTemporaryFile(mode='w', suffix='.xml',
                                          delete=False) as f:
             f.write(xml)
@@ -125,8 +129,63 @@ class BluetoothHID:
 
         logger.error("All SDP registration methods failed — Android MDM may block connection")
 
-    def _register_sdp_dbus(self, xml: str) -> bool:
-        """Register SDP record via BlueZ D-Bus compat API (org.bluez.Service)."""
+    def _register_sdp_profile_manager(self, xml: str) -> bool:
+        """Register SDP record via org.bluez.ProfileManager1 (BlueZ 5.x)."""
+        try:
+            import dbus
+            import dbus.service
+            import dbus.mainloop.glib
+            dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+            bus = dbus.SystemBus()
+
+            # Minimal D-Bus profile object — BlueZ requires an object at the path.
+            # With --noplugin=input, NewConnection won't be called; connections
+            # are handled by our raw L2CAP sockets instead.
+            class _HIDStub(dbus.service.Object):
+                @dbus.service.method('org.bluez.Profile1',
+                                     in_signature='', out_signature='')
+                def Release(self): pass
+
+                @dbus.service.method('org.bluez.Profile1',
+                                     in_signature='oha{sv}', out_signature='')
+                def NewConnection(self, device, fd, fd_properties): pass
+
+                @dbus.service.method('org.bluez.Profile1',
+                                     in_signature='o', out_signature='')
+                def RequestDisconnection(self, device): pass
+
+            self._hid_dbus_stub = _HIDStub(bus, '/org/bt_kvm/hid')
+
+            manager = dbus.Interface(
+                bus.get_object('org.bluez', '/org/bluez'),
+                'org.bluez.ProfileManager1'
+            )
+            manager.RegisterProfile(
+                '/org/bt_kvm/hid',
+                '00001124-0000-1000-8000-00805f9b34fb',
+                {
+                    'ServiceRecord':          dbus.String(xml),
+                    'RequireAuthentication':  dbus.Boolean(False),
+                    'RequireAuthorization':   dbus.Boolean(False),
+                }
+            )
+
+            # GLib main loop keeps the D-Bus object alive in a daemon thread
+            from gi.repository import GLib
+            loop = GLib.MainLoop()
+            self._dbus_loop = loop
+            threading.Thread(target=loop.run, daemon=True,
+                             name="dbus-loop").start()
+
+            logger.info("SDP HID record registered via ProfileManager1")
+            return True
+        except Exception as e:
+            logger.warning(f"ProfileManager1 SDP failed: {e}")
+            return False
+
+    def _register_sdp_compat(self, xml: str) -> bool:
+        """Register SDP record via org.bluez.Service (compat, BlueZ 4.x style)."""
         try:
             import dbus
             bus = dbus.SystemBus()
@@ -135,10 +194,11 @@ class BluetoothHID:
                 'org.bluez.Service'
             )
             handle = service.AddRecord(xml)
-            logger.info(f"SDP HID record registered via D-Bus (handle=0x{int(handle):x})")
+            logger.info(f"SDP HID record registered via compat D-Bus "
+                        f"(handle=0x{int(handle):x})")
             return True
         except Exception as e:
-            logger.warning(f"D-Bus SDP failed: {e}")
+            logger.warning(f"Compat D-Bus SDP failed: {e}")
             return False
 
     @staticmethod

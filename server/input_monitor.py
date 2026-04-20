@@ -149,7 +149,18 @@ class InputMonitor:
 
     def _choose_backend(self, method: str):
         if method == 'x11':
-            return self._make_x11_backend()
+            # If physical mice are present, use them via evdev for unbounded
+            # movement (Barrier cannot block evdev).  Keyboard + Barrier cursor
+            # suppression still go through X11 grab.
+            _, mice = _find_keyboards_and_mice()
+            if mice:
+                cap = self._make_x11_backend(suppress_mouse=True)
+                logger.info(f"Capture backend: mixed "
+                            f"(X11 keyboard + {len(mice)} evdev mouse/mice)")
+                return {'type': 'mixed', 'capture': cap['capture'], 'mice': mice}
+            cap = self._make_x11_backend()
+            logger.info("Capture backend: X11 grab (Barrier-compatible)")
+            return {'type': 'x11', 'capture': cap['capture']}
 
         # evdev or auto
         keyboards, mice = _find_keyboards_and_mice()
@@ -160,14 +171,16 @@ class InputMonitor:
         if method == 'auto':
             logger.info("No evdev devices found → falling back to X11 grab "
                         "(Barrier mode)")
-            return self._make_x11_backend()
+            cap = self._make_x11_backend()
+            logger.info("Capture backend: X11 grab (Barrier-compatible)")
+            return {'type': 'x11', 'capture': cap['capture']}
 
         raise RuntimeError("No evdev input devices found. Run as root?")
 
-    def _make_x11_backend(self):
+    def _make_x11_backend(self, suppress_mouse: bool = False):
         from x11_grab import X11GrabCapture
-        cap = X11GrabCapture(self._display, self._root)
-        logger.info("Capture backend: X11 grab (Barrier-compatible)")
+        cap = X11GrabCapture(self._display, self._root,
+                             suppress_mouse=suppress_mouse)
         return {'type': 'x11', 'capture': cap}
 
     # ------------------------------------------------------------------ #
@@ -218,9 +231,17 @@ class InputMonitor:
                     dev.grab()
                 except Exception as e:
                     logger.warning(f"evdev grab {dev.path}: {e}")
+        elif self._backend['type'] == 'mixed':
+            # Physical mice via evdev (unbounded, bypasses Barrier transfer).
+            # X11 grab for keyboard + re-warp to suppress Barrier cursor transfer.
+            for dev in self._backend['mice']:
+                try:
+                    dev.grab()
+                except Exception as e:
+                    logger.warning(f"evdev grab mouse {dev.path}: {e}")
+            self._warp(cx, cy)
+            self._backend['capture'].grab(warp_x=cx, warp_y=cy)
         else:
-            # Warp before grab so the anchor is center, not the edge.
-            # Pass coords explicitly to avoid any query_pointer() race.
             self._warp(cx, cy)
             self._backend['capture'].grab(warp_x=cx, warp_y=cy)
 
@@ -241,6 +262,13 @@ class InputMonitor:
                     dev.ungrab()
                 except Exception:
                     pass
+        elif self._backend['type'] == 'mixed':
+            for dev in self._backend['mice']:
+                try:
+                    dev.ungrab()
+                except Exception:
+                    pass
+            self._backend['capture'].ungrab()
         else:
             self._backend['capture'].ungrab()
 
@@ -278,6 +306,11 @@ class InputMonitor:
     def _event_loop(self):
         if self._backend['type'] == 'evdev':
             self._evdev_loop()
+        elif self._backend['type'] == 'mixed':
+            # Physical mice via evdev thread; keyboard via x11 in this thread.
+            threading.Thread(target=self._evdev_mice_loop,
+                             daemon=True, name="evdev-mice").start()
+            self._x11_loop()
         else:
             self._x11_loop()
 
@@ -306,6 +339,40 @@ class InputMonitor:
                                 event.code == SWITCH_BACK_KEY and
                                 event.value == 1):
                             self._leave_remote()
+                            break
+                        if event.type == ecodes.EV_REL:
+                            if event.code == ecodes.REL_X:
+                                self._virt_x += event.value
+                            elif event.code == ecodes.REL_Y:
+                                self._virt_y += event.value
+                            if self._past_return_edge():
+                                self._leave_remote()
+                                break
+                        if self.event_callback:
+                            self.event_callback(event)
+                except OSError:
+                    pass
+
+    # ---- evdev mice-only loop (mixed mode) ----
+
+    def _evdev_mice_loop(self):
+        """Handles physical mouse movement in mixed mode (no keyboard, no Scroll Lock)."""
+        mice = self._backend['mice']
+        while self._running:
+            if not self.remote_mode:
+                time.sleep(0.02)
+                continue
+            fd_map = {d.fd: d for d in mice}
+            try:
+                readable, _, _ = select.select(fd_map, [], [], 0.1)
+            except Exception:
+                time.sleep(0.01)
+                continue
+            for fd in readable:
+                dev = fd_map[fd]
+                try:
+                    for event in dev.read():
+                        if not self.remote_mode:
                             break
                         if event.type == ecodes.EV_REL:
                             if event.code == ecodes.REL_X:

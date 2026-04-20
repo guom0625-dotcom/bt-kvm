@@ -33,10 +33,11 @@ class X11GrabCapture:
     (hid_reports, main.py) needs no changes.
     """
 
-    def __init__(self, display_obj, root):
+    def __init__(self, display_obj, root, suppress_mouse: bool = False):
         self._d  = display_obj
         self._root = root
         self._grabbed = False
+        self._suppress_mouse = suppress_mouse  # True in mixed mode: re-warp but don't emit moves
         self._prev_x = 0
         self._prev_y = 0
         self._warp_x = 0   # re-warp anchor (monitor center)
@@ -167,7 +168,7 @@ class X11GrabCapture:
             self._prev_x = ev.root_x
             self._prev_y = ev.root_y
             if dx or dy:
-                # Re-center cursor so Barrier never reaches its transfer edge.
                 self._root.warp_pointer(self._warp_x, self._warp_y)
                 self._d.flush()
-                self._q.put(('move', dx, dy))
+                if not self._suppress_mouse:
+                    self._q.put(('move', dx, dy))

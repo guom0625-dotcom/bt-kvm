@@ -18,7 +18,6 @@ from evdev import InputDevice, list_devices, ecodes
 logger = logging.getLogger(__name__)
 
 DEFAULT_RETURN_THRESHOLD = 80
-SWITCH_BACK_KEY = ecodes.KEY_SCROLLLOCK
 RETURN_EDGE = {'right': 'left', 'left': 'right',
                'top': 'bottom', 'bottom': 'top'}
 
@@ -51,6 +50,9 @@ class InputMonitor:
         self._virt_x = 0
         self._virt_y = 0
         self._ignore_motion_until = 0.0
+
+        keyname = config.get('toggle_key', 'KEY_PAUSE')
+        self._toggle_keycode = getattr(ecodes, keyname, ecodes.KEY_PAUSE)
 
         self._display = None
         self._root = None
@@ -109,6 +111,37 @@ class InputMonitor:
         logger.info(f"Physical desktop: ({self._desk_x0},{self._desk_y0})"
                     f"–({self._desk_x1},{self._desk_y1})"
                     f"  warp target: {ow}x{oh} at ({ox},{oy})")
+
+        # Passive grab: toggle hotkey fires even when not in remote mode
+        self._register_toggle_hotkey()
+
+    def _register_toggle_hotkey(self):
+        from Xlib import X
+        keycode = self._toggle_keycode + 8  # evdev → X11 keycode
+        try:
+            self._poll_root.grab_key(keycode, X.AnyModifier, True,
+                                     X.GrabModeAsync, X.GrabModeAsync)
+            self._poll_display.flush()
+            keyname = self._config.get('toggle_key', 'KEY_PAUSE')
+            logger.info(f"Toggle hotkey: {keyname} (X11 keycode {keycode}) — "
+                        "press to enter/exit Android mode")
+        except Exception as e:
+            logger.warning(f"XGrabKey failed: {e}")
+
+    def _check_hotkey_events(self):
+        """Process passive hotkey events on the polling display."""
+        from Xlib import X
+        try:
+            while self._poll_display.pending_events():
+                ev = self._poll_display.next_event()
+                if ev.type == X.KeyPress:
+                    if ev.detail - 8 == self._toggle_keycode:
+                        if self.remote_mode:
+                            self._leave_remote()
+                        else:
+                            self._enter_remote()
+        except Exception:
+            pass
 
     @staticmethod
     def _get_primary_monitor_bounds():
@@ -291,9 +324,16 @@ class InputMonitor:
         self._running = False
         if self.remote_mode:
             self._leave_remote()
+        try:
+            from Xlib import X
+            self._poll_root.ungrab_key(self._toggle_keycode + 8, X.AnyModifier)
+            self._poll_display.flush()
+        except Exception:
+            pass
 
     def _edge_loop(self):
         while self._running:
+            self._check_hotkey_events()
             if not self.remote_mode:
                 try:
                     x, y = self._mouse_pos()
@@ -336,7 +376,7 @@ class InputMonitor:
                         if not self.remote_mode:
                             break
                         if (event.type == ecodes.EV_KEY and
-                                event.code == SWITCH_BACK_KEY and
+                                event.code == self._toggle_keycode and
                                 event.value == 1):
                             self._leave_remote()
                             break
@@ -407,7 +447,7 @@ class InputMonitor:
                 if kind == 'key':
                     _, code, value = evt
                     # Scroll Lock → switch back (don't forward to Android)
-                    if code == SWITCH_BACK_KEY and value == 1:
+                    if code == self._toggle_keycode and value == 1:
                         self._leave_remote()
                         break
                     if self.event_callback:

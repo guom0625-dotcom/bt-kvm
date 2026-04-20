@@ -138,13 +138,13 @@ class HIDState:
         self._pending_scroll = 0
 
     def handle_key(self, code: int, value: int):
-        """Returns (report_type, bytes) or None. value: 1=press, 0=release, 2=repeat."""
+        """Returns list of (report_type, bytes). value: 1=press, 0=release, 2=repeat."""
         if code in MODIFIER_MAP:
             if value:
                 self.modifiers |= MODIFIER_MAP[code]
             else:
                 self.modifiers &= ~MODIFIER_MAP[code]
-            return ('keyboard', self._build_keyboard())
+            return [('keyboard', self._build_keyboard())]
 
         if code in KEY_MAP:
             hid = KEY_MAP[code]
@@ -154,9 +154,9 @@ class HIDState:
                     self.keys.pop(0)
             elif not value and hid in self.keys:
                 self.keys.remove(hid)
-            return ('keyboard', self._build_keyboard())
+            return [('keyboard', self._build_keyboard())]
 
-        return None
+        return []
 
     def handle_mouse_button(self, code: int, value: int):
         if code in MOUSE_BUTTON_MAP:
@@ -165,8 +165,8 @@ class HIDState:
                 self.mouse_buttons |= bit
             else:
                 self.mouse_buttons &= ~bit
-            return ('mouse', self._build_mouse(0, 0, 0))
-        return None
+            return [('mouse', self._build_mouse(0, 0, 0))]
+        return []
 
     def handle_rel(self, code: int, value: int):
         if code == ecodes.REL_X:
@@ -177,14 +177,28 @@ class HIDState:
             self._pending_scroll += value
 
     def flush_mouse(self):
-        """Call on EV_SYN to emit accumulated mouse movement."""
-        if self._pending_dx == 0 and self._pending_dy == 0 and self._pending_scroll == 0:
-            return None
-        report = self._build_mouse(self._pending_dx, self._pending_dy, self._pending_scroll)
-        self._pending_dx = 0
-        self._pending_dy = 0
-        self._pending_scroll = 0
-        return ('mouse', report)
+        """Call on EV_SYN to emit accumulated mouse movement.
+
+        Splits large deltas into chunks of ±127 so fast flicks don't get
+        clamped into a single under-scaled report (HID descriptor uses 8-bit
+        signed relative fields).
+        """
+        dx, dy, scroll = self._pending_dx, self._pending_dy, self._pending_scroll
+        self._pending_dx = self._pending_dy = self._pending_scroll = 0
+
+        if dx == 0 and dy == 0 and scroll == 0:
+            return []
+
+        reports = []
+        while dx != 0 or dy != 0 or scroll != 0:
+            cx = 127 if dx > 127 else (-127 if dx < -127 else dx)
+            cy = 127 if dy > 127 else (-127 if dy < -127 else dy)
+            cs = 127 if scroll > 127 else (-127 if scroll < -127 else scroll)
+            reports.append(('mouse', self._build_mouse(cx, cy, cs)))
+            dx -= cx
+            dy -= cy
+            scroll -= cs
+        return reports
 
     def release_all(self):
         """Returns reports to release all keys and buttons."""

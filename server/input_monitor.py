@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from evdev import InputDevice, list_devices, ecodes
+from evdev import InputDevice, InputEvent, list_devices, ecodes
 
 logger = logging.getLogger(__name__)
 
@@ -495,15 +495,12 @@ class InputMonitor:
 
     @staticmethod
     def _make_key_event(code, value):
-        from evdev import InputEvent
         return InputEvent(0, 0, ecodes.EV_KEY, code, value)
 
     @staticmethod
     def _make_rel_event(code, value):
-        from evdev import InputEvent
         return InputEvent(0, 0, ecodes.EV_REL, code, value)
 
     @staticmethod
     def _make_syn_event():
-        from evdev import InputEvent
         return InputEvent(0, 0, ecodes.EV_SYN, ecodes.SYN_REPORT, 0)

@@ -11,10 +11,17 @@ import time
 # Adjust path so sibling imports work when run directly
 sys.path.insert(0, os.path.dirname(__file__))
 
+from evdev import InputEvent, ecodes
+
 from bt_hid import BluetoothHID
 from clipboard_sync import ClipboardSync
 from hid_reports import HIDState
 from input_monitor import InputMonitor
+
+_MOUSE_BTNS = frozenset((ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
+                         ecodes.BTN_MIDDLE, ecodes.BTN_SIDE,
+                         ecodes.BTN_EXTRA))
+_REL_XY = frozenset((ecodes.REL_X, ecodes.REL_Y))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,30 +88,28 @@ def main():
     monitor = InputMonitor(config, on_enter_remote, on_leave_remote)
 
     def on_event(event):
-        from evdev import ecodes
-        result = None
+        et = event.type
+        reports = None
 
-        if event.type == ecodes.EV_KEY:
-            if event.code in (ecodes.BTN_LEFT, ecodes.BTN_RIGHT,
-                              ecodes.BTN_MIDDLE, ecodes.BTN_SIDE,
-                              ecodes.BTN_EXTRA):
-                result = state.handle_mouse_button(event.code, event.value)
+        if et == ecodes.EV_KEY:
+            if event.code in _MOUSE_BTNS:
+                reports = state.handle_mouse_button(event.code, event.value)
             else:
-                result = state.handle_key(event.code, event.value)
+                reports = state.handle_key(event.code, event.value)
 
-        elif event.type == ecodes.EV_REL:
-            if speed != 1.0 and event.code in (ecodes.REL_X, ecodes.REL_Y):
-                from evdev import InputEvent
-                event = InputEvent(event.sec, event.usec, event.type,
-                                   event.code, int(event.value * speed))
-            state.handle_rel(event.code, event.value)
+        elif et == ecodes.EV_REL:
+            code = event.code
+            value = event.value
+            if speed != 1.0 and code in _REL_XY:
+                value = int(value * speed)
+            state.handle_rel(code, value)
 
-        elif event.type == ecodes.EV_SYN:
-            result = state.flush_mouse()
+        elif et == ecodes.EV_SYN:
+            reports = state.flush_mouse()
 
-        if result:
-            _, report = result
-            hid.send(report)
+        if reports:
+            for _, report in reports:
+                hid.send(report)
 
     monitor.event_callback = on_event
 

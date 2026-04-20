@@ -130,15 +130,31 @@ class X11GrabCapture:
                 if not readable:
                     continue
                 with self._lock:
+                    total_dx = 0
+                    total_dy = 0
+                    moved = False
                     while self._d.pending_events():
                         ev = self._d.next_event()
-                        if self._grabbed:
-                            self._dispatch(ev)
+                        if not self._grabbed:
+                            continue
+                        dx, dy, is_move = self._dispatch(ev)
+                        if is_move:
+                            total_dx += dx
+                            total_dy += dy
+                            moved = True
+                    # Single warp + flush per batch: N motion events → 1 echo
+                    # instead of N echoes, halving X11 event load.
+                    if moved:
+                        if not self._suppress_mouse and (total_dx or total_dy):
+                            self._q.put(('move', total_dx, total_dy))
+                        self._root.warp_pointer(self._warp_x, self._warp_y)
+                        self._d.flush()
             except Exception as e:
                 logger.debug(f"x11 event_loop: {e}")
                 time.sleep(0.01)
 
     def _dispatch(self, ev):
+        """Returns (dx, dy, is_move). Non-motion events return (0,0,False)."""
         t = ev.type
 
         if t in (X.KeyPress, X.KeyRelease):
@@ -162,13 +178,12 @@ class X11GrabCapture:
             # Re-warp echo: cursor arrived back at anchor after our warp call.
             # Don't update _prev so Barrier's position tracking stays intact.
             if ev.root_x == self._warp_x and ev.root_y == self._warp_y:
-                return
+                return 0, 0, False
             dx = ev.root_x - self._prev_x
             dy = ev.root_y - self._prev_y
             self._prev_x = ev.root_x
             self._prev_y = ev.root_y
             if dx or dy:
-                self._root.warp_pointer(self._warp_x, self._warp_y)
-                self._d.flush()
-                if not self._suppress_mouse:
-                    self._q.put(('move', dx, dy))
+                return dx, dy, True
+
+        return 0, 0, False

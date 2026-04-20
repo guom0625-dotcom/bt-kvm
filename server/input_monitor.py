@@ -177,6 +177,9 @@ class InputMonitor:
         self._virt_x = 0
         self._virt_y = 0
 
+        cx = self._mon_x + self._mon_w // 2
+        cy = self._mon_y + self._mon_h // 2
+
         if self._backend['type'] == 'evdev':
             for dev in self._backend['keyboards'] + self._backend['mice']:
                 try:
@@ -184,13 +187,12 @@ class InputMonitor:
                 except Exception as e:
                     logger.warning(f"evdev grab {dev.path}: {e}")
         else:
-            self._backend['capture'].grab()
+            # Warp before grab so the anchor is center, not the edge.
+            # Pass coords explicitly to avoid any query_pointer() race.
+            self._warp(cx, cy)
+            self._backend['capture'].grab(warp_x=cx, warp_y=cy)
 
-        # Warp to primary monitor center, not virtual desktop center.
-        # Then suppress motion events briefly so the warp itself doesn't
-        # immediately trigger the return-edge check.
-        self._warp(self._mon_x + self._mon_w // 2,
-                   self._mon_y + self._mon_h // 2)
+        self._warp(cx, cy)
         self._ignore_motion_until = time.time() + 0.25
         ret = RETURN_EDGE[self._config.get('edge', 'right')]
         logger.info(f">>> Android  (마우스를 {ret}으로 밀거나 Scroll Lock 복귀)")

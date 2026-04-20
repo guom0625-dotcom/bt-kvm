@@ -48,14 +48,16 @@ class X11GrabCapture:
     # ------------------------------------------------------------------ #
     # Public API
 
-    def grab(self):
+    def grab(self, warp_x: int = None, warp_y: int = None):
         with self._lock:
-            p = self._root.query_pointer()
-            # Anchor point: cursor stays here visually while in remote mode.
-            # _enter_remote() already warped the cursor to monitor center
-            # before calling grab(), so this captures that position.
-            self._warp_x = p.root_x
-            self._warp_y = p.root_y
+            if warp_x is not None and warp_y is not None:
+                # Caller already warped cursor here; use as anchor.
+                self._warp_x = warp_x
+                self._warp_y = warp_y
+            else:
+                p = self._root.query_pointer()
+                self._warp_x = p.root_x
+                self._warp_y = p.root_y
             self._root.grab_keyboard(
                 True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime
             )

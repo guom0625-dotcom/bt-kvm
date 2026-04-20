@@ -76,12 +76,16 @@ mkdir -p "$(dirname "$OVERRIDE")"
 cat > "$OVERRIDE" << 'EOF'
 [Service]
 ExecStart=
-ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input
+ExecStart=/usr/lib/bluetooth/bluetoothd --compat --noplugin=pnat,input,a2dp,avrcp,network,sap
 EOF
 echo "Set bluetoothd: --compat --noplugin=pnat,input"
 
 systemctl daemon-reload
 systemctl restart bluetooth
+# Stop obexd — it registers File Transfer, Phone Book, Message Access SDP records
+# that make the device look like a phone/PC to Android MDM policies.
+systemctl stop obex 2>/dev/null || true
+systemctl disable obex 2>/dev/null || true
 sleep 2
 
 echo ""

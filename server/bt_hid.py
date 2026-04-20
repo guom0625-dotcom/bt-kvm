@@ -105,29 +105,43 @@ class BluetoothHID:
             f.write(xml)
             xml_path = f.name
 
+        # Try multiple argument styles — sdptool --xml syntax varies by bluez version
+        candidates = [
+            ['sdptool', 'add', '--handle=0x00010001', '--xml', xml_path],
+            ['sdptool', 'add', '--xml', xml_path],
+            ['sdptool', 'add', '--handle=0x00010001', f'--xml={xml_path}'],
+            ['sdptool', 'add', f'--xml={xml_path}'],
+        ]
         try:
-            r = subprocess.run(
-                ['sdptool', 'add', '--handle=0x00010001', f'--xml={xml_path}'],
-                capture_output=True
-            )
-            if r.returncode != 0:
-                # fallback: without explicit handle
-                r = subprocess.run(
-                    ['sdptool', 'add', f'--xml={xml_path}'],
-                    capture_output=True
-                )
-            if r.returncode != 0:
-                logger.error(f"sdptool failed: {r.stderr.decode().strip()}")
-                logger.error("Continuing anyway - Android may still connect")
-            else:
-                logger.info("SDP HID record registered.")
+            for cmd in candidates:
+                r = subprocess.run(cmd, capture_output=True)
+                if r.returncode == 0:
+                    logger.info("SDP HID record registered.")
+                    return
+            logger.error(f"sdptool failed: {r.stderr.decode().strip()}")
+            logger.error("Continuing anyway - Android may still connect")
         finally:
             os.unlink(xml_path)
 
+    @staticmethod
+    def _get_local_bdaddr() -> str:
+        try:
+            r = subprocess.run(['hciconfig', 'hci0'], capture_output=True, text=True)
+            for line in r.stdout.splitlines():
+                if 'BD Address:' in line:
+                    return line.split('BD Address:')[1].split()[0].strip()
+        except Exception:
+            pass
+        return ""
+
     def listen(self):
         """Block until Android connects on both HID channels."""
-        self._ctrl_server = self._make_l2cap_socket(P_CTRL)
-        self._intr_server = self._make_l2cap_socket(P_INTR)
+        bdaddr = self._get_local_bdaddr()
+        if not bdaddr:
+            raise OSError("Could not get hci0 BD address — is the BT adapter up?")
+        logger.info(f"Binding L2CAP to {bdaddr}")
+        self._ctrl_server = self._make_l2cap_socket(P_CTRL, bdaddr)
+        self._intr_server = self._make_l2cap_socket(P_INTR, bdaddr)
 
         logger.info("Waiting for Android connection "
                     f"(pair '{self.device_name}' in Android BT settings)...")
@@ -183,11 +197,11 @@ class BluetoothHID:
         self._ctrl_server = self._intr_server = None
 
     @staticmethod
-    def _make_l2cap_socket(psm: int) -> socket.socket:
+    def _make_l2cap_socket(psm: int, bdaddr: str = "") -> socket.socket:
         s = socket.socket(socket.AF_BLUETOOTH,
                           socket.SOCK_SEQPACKET,
                           socket.BTPROTO_L2CAP)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("", psm))
+        s.bind((bdaddr, psm))
         s.listen(1)
         return s

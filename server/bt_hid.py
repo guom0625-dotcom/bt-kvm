@@ -107,7 +107,15 @@ class BluetoothHID:
         A real BT keyboard only has HID (0x1124) + PnP (0x1200). Audio
         profiles make Android MDM classify the device as a phone/PC.
         """
-        UNWANTED = {'0x1112', '0x1108', '0x111e', '0x111f', '0x1203', '0x1101'}
+        # Short UUIDs and their 128-bit Bluetooth base UUID equivalents
+        UNWANTED = {
+            '0x1112', '00001112',  # Headset Audio Gateway (HFP AG)
+            '0x1108', '00001108',  # Headset (HSP)
+            '0x111e', '0000111e',  # Handsfree
+            '0x111f', '0000111f',  # Handsfree Audio Gateway
+            '0x1203', '00001203',  # Generic Audio
+            '0x1101', '00001101',  # Serial Port
+        }
         try:
             r = subprocess.run(['sdptool', 'browse', 'local'],
                                capture_output=True, text=True, timeout=5)

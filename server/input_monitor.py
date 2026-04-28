@@ -104,6 +104,14 @@ class InputMonitor:
         try:
             self._poll_root.grab_key(keycode, X.AnyModifier, True,
                                      X.GrabModeAsync, X.GrabModeAsync)
+            # Disable X autorepeat for the toggle key. Without this, when we
+            # evdev-grab the keyboard mid-press, X never sees KeyRelease and
+            # fires phantom autorepeat KeyPress events forever.
+            try:
+                self._poll_display.change_keyboard_control(
+                    key=keycode, auto_repeat_mode=X.AutoRepeatModeOff)
+            except Exception as e:
+                logger.warning(f"Disable autorepeat for toggle key failed: {e}")
             self._poll_display.flush()
             keyname = self._config.get('toggle_key', 'KEY_PAUSE')
             logger.info(f"Toggle hotkey: {keyname} (X11 keycode {keycode})")
@@ -116,6 +124,8 @@ class InputMonitor:
             while self._poll_display.pending_events():
                 ev = self._poll_display.next_event()
                 if ev.type == X.KeyPress and ev.detail - 8 == self._toggle_keycode:
+                    if time.time() < self._ignore_toggle_until:
+                        continue
                     self._poll_display.ungrab_keyboard(X.CurrentTime)
                     self._poll_display.flush()
                     if self.remote_mode:
@@ -218,6 +228,7 @@ class InputMonitor:
         if not self.remote_mode:
             return
         self.remote_mode = False
+        self._ignore_toggle_until = time.time() + 0.3
 
         for dev in self._keyboards + self._mice:
             try:
@@ -246,7 +257,13 @@ class InputMonitor:
             self._leave_remote()
         try:
             from Xlib import X
-            self._poll_root.ungrab_key(self._toggle_keycode + 8, X.AnyModifier)
+            keycode = self._toggle_keycode + 8
+            self._poll_root.ungrab_key(keycode, X.AnyModifier)
+            try:
+                self._poll_display.change_keyboard_control(
+                    key=keycode, auto_repeat_mode=X.AutoRepeatModeDefault)
+            except Exception:
+                pass
             self._poll_display.flush()
         except Exception:
             pass

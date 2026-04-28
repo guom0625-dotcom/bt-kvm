@@ -356,8 +356,10 @@ class BluetoothHID:
     def send(self, report: bytes):
         if not self.connected:
             return
-        if self._send_count < 5:
-            logger.info(f"HID send #{self._send_count}: {report.hex()}")
+        if self._send_count < 50:
+            rid = report[1] if len(report) > 1 else 0
+            tag = 'kb' if rid == 1 else 'mouse' if rid == 2 else f'r{rid:02x}'
+            logger.info(f"HID send #{self._send_count} ({tag}): {report.hex()}")
             self._send_count += 1
         try:
             self._intr_client.send(report)

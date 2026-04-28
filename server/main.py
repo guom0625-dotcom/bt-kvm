@@ -49,6 +49,8 @@ def parse_args():
                    help='Bluetooth device name (overrides config.json)')
     p.add_argument('--speed', type=float, metavar='N',
                    help='Mouse speed multiplier (overrides config.json)')
+    p.add_argument('--adapter', metavar='HCIx',
+                   help='Bluetooth adapter (e.g. hci1, overrides config.json)')
     return p.parse_args()
 
 
@@ -67,14 +69,18 @@ def main():
         config['device_name'] = args.name
     if args.speed is not None:
         config['mouse_speed_multiplier'] = args.speed
+    if args.adapter:
+        config['bt_adapter'] = args.adapter
 
     edge = config.get('edge', 'right')
+    adapter = config.get('bt_adapter', 'hci0')
     logger.info(f"Edge: {edge} | Device: {config.get('device_name','Linux KVM')} "
+                f"| Adapter: {adapter} "
                 f"| Speed: {config.get('mouse_speed_multiplier', 1.0)}")
     device_name = config.get('device_name', 'Linux KVM')
     speed = config.get('mouse_speed_multiplier', 1.0)
 
-    hid = BluetoothHID(device_name=device_name)
+    hid = BluetoothHID(device_name=device_name, adapter=adapter)
     state = HIDState()
 
     def on_enter_remote():

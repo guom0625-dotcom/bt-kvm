@@ -1,5 +1,6 @@
 {
   "device_name": "Linux KVM",
+  "bt_adapter": "hci1",
   "edge": "bottom",
   "edge_threshold": 3,
   "return_threshold": 80,

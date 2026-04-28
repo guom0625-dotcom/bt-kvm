@@ -75,8 +75,10 @@ def _build_sdp_xml(device_name: str) -> str:
 
 
 class BluetoothHID:
-    def __init__(self, device_name: str = "Linux KVM"):
+    def __init__(self, device_name: str = "Linux KVM", adapter: str = "hci0"):
         self.device_name = device_name
+        self._adapter = adapter                          # e.g. "hci1"
+        self._adapter_index = adapter.replace('hci', '') # e.g. "1"
         self._ctrl_server = None
         self._intr_server = None
         self._ctrl_client = None
@@ -85,12 +87,12 @@ class BluetoothHID:
 
     def setup(self):
         """Configure BT adapter as HID peripheral and register SDP record."""
-        logger.info("Configuring Bluetooth adapter...")
+        logger.info(f"Configuring Bluetooth adapter ({self._adapter})...")
         self._spoof_bdaddr()
         cmds = [
-            ['hciconfig', 'hci0', 'up'],
-            ['hciconfig', 'hci0', 'name', self.device_name],
-            ['hciconfig', 'hci0', 'piscan'],
+            ['hciconfig', self._adapter, 'up'],
+            ['hciconfig', self._adapter, 'name', self.device_name],
+            ['hciconfig', self._adapter, 'piscan'],
         ]
         for cmd in cmds:
             r = subprocess.run(cmd, capture_output=True)
@@ -101,7 +103,7 @@ class BluetoothHID:
         self._purge_audio_sdp()
 
         # Set CoD after SDP registration — ProfileManager1 may reset it.
-        r = subprocess.run(['hciconfig', 'hci0', 'class', '0x002540'],
+        r = subprocess.run(['hciconfig', self._adapter, 'class', '0x002540'],
                            capture_output=True)
         if r.returncode != 0:
             logger.warning(f"hciconfig class: {r.stderr.decode().strip()}")
@@ -150,34 +152,42 @@ class BluetoothHID:
         spoofed  = f'00:07:61:{suffix}'
 
         # btmgmt approach (works on most adapters)
-        r = subprocess.run(
-            ['btmgmt', '--index', '0', 'power', 'off'],
+        subprocess.run(
+            ['btmgmt', '--index', self._adapter_index, 'power', 'off'],
             capture_output=True, timeout=5,
         )
         r = subprocess.run(
-            ['btmgmt', '--index', '0', 'public-addr', spoofed],
+            ['btmgmt', '--index', self._adapter_index, 'public-addr', spoofed],
             capture_output=True, text=True, timeout=5,
         )
         subprocess.run(
-            ['btmgmt', '--index', '0', 'power', 'on'],
+            ['btmgmt', '--index', self._adapter_index, 'power', 'on'],
             capture_output=True, timeout=5,
         )
         time.sleep(1)  # wait for bluetoothd to re-init before setting name
         subprocess.run(
-            ['btmgmt', '--index', '0', 'name', self.device_name],
+            ['btmgmt', '--index', self._adapter_index, 'name', self.device_name],
             capture_output=True, timeout=5,
         )
         if r.returncode == 0:
             logger.info(f"BD address spoofed: {original} → {spoofed}  (Logitech OUI)")
             return
 
-        # Fallback: bdaddr tool (CSR chips)
-        subprocess.run(['hciconfig', 'hci0', 'down'], capture_output=True)
-        r = subprocess.run(
-            ['bdaddr', '-i', 'hci0', spoofed],
-            capture_output=True, text=True, timeout=5,
-        )
-        subprocess.run(['hciconfig', 'hci0', 'up'], capture_output=True)
+        # Fallback: bdaddr tool (CSR chips — needs `bluez-tools` package)
+        subprocess.run(['hciconfig', self._adapter, 'down'], capture_output=True)
+        try:
+            r = subprocess.run(
+                ['bdaddr', '-i', self._adapter, spoofed],
+                capture_output=True, text=True, timeout=5,
+            )
+        except FileNotFoundError:
+            subprocess.run(['hciconfig', self._adapter, 'up'], capture_output=True)
+            logger.warning(
+                "BD address spoofing failed: `bdaddr` not installed. "
+                "Install `bluez-tools` (apt) to enable CSR chip spoofing."
+            )
+            return
+        subprocess.run(['hciconfig', self._adapter, 'up'], capture_output=True)
         if r.returncode == 0:
             logger.info(f"BD address spoofed via bdaddr: {original} → {spoofed}")
         else:
@@ -277,7 +287,7 @@ class BluetoothHID:
             import dbus
             bus = dbus.SystemBus()
             service = dbus.Interface(
-                bus.get_object('org.bluez', '/org/bluez/hci0'),
+                bus.get_object('org.bluez', f'/org/bluez/{self._adapter}'),
                 'org.bluez.Service'
             )
             handle = service.AddRecord(xml)
@@ -288,10 +298,10 @@ class BluetoothHID:
             logger.warning(f"Compat D-Bus SDP failed: {e}")
             return False
 
-    @staticmethod
-    def _get_local_bdaddr() -> str:
+    def _get_local_bdaddr(self) -> str:
         try:
-            r = subprocess.run(['hciconfig', 'hci0'], capture_output=True, text=True)
+            r = subprocess.run(['hciconfig', self._adapter],
+                               capture_output=True, text=True)
             for line in r.stdout.splitlines():
                 if 'BD Address:' in line:
                     return line.split('BD Address:')[1].split()[0].strip()
@@ -303,7 +313,9 @@ class BluetoothHID:
         """Block until Android connects on both HID channels."""
         bdaddr = self._get_local_bdaddr()
         if not bdaddr:
-            raise OSError("Could not get hci0 BD address — is the BT adapter up?")
+            raise OSError(
+                f"Could not get {self._adapter} BD address — is the adapter up?"
+            )
         logger.info(f"Binding L2CAP to {bdaddr}")
         self._ctrl_server = self._make_l2cap_socket(P_CTRL, bdaddr)
         self._intr_server = self._make_l2cap_socket(P_INTR, bdaddr)

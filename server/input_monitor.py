@@ -126,6 +126,7 @@ class InputMonitor:
                 if ev.type == X.KeyPress and ev.detail - 8 == self._toggle_keycode:
                     if time.time() < self._ignore_toggle_until:
                         continue
+                    logger.info(f"toggle from X11 (mode={'remote' if self.remote_mode else 'local'})")
                     self._poll_display.ungrab_keyboard(X.CurrentTime)
                     self._poll_display.flush()
                     if self.remote_mode:
@@ -316,6 +317,9 @@ class InputMonitor:
                                 event.value == 1):
                             if time.time() < self._ignore_toggle_until:
                                 continue
+                            logger.info(
+                                f"toggle leave from evdev "
+                                f"(dt={time.time()-self._ignore_toggle_until+0.3:.3f}s after enter)")
                             self._leave_remote()
                             break
                         if event.type == ecodes.EV_REL:

@@ -84,6 +84,7 @@ class BluetoothHID:
         self._ctrl_client = None
         self._intr_client = None
         self.connected = False
+        self._send_count = 0
 
     def setup(self):
         """Configure BT adapter as HID peripheral and register SDP record."""
@@ -355,6 +356,9 @@ class BluetoothHID:
     def send(self, report: bytes):
         if not self.connected:
             return
+        if self._send_count < 5:
+            logger.info(f"HID send #{self._send_count}: {report.hex()}")
+            self._send_count += 1
         try:
             self._intr_client.send(report)
         except OSError as e:

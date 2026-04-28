@@ -43,6 +43,7 @@ class InputMonitor:
         self.remote_mode = False
         self._virt_x = 0
         self._virt_y = 0
+        self._ignore_toggle_until = 0.0
 
         keyname = config.get('toggle_key', 'KEY_PAUSE')
         self._toggle_keycode = getattr(ecodes, keyname, ecodes.KEY_PAUSE)
@@ -197,6 +198,7 @@ class InputMonitor:
         self.remote_mode = True
         self._virt_x = 0
         self._virt_y = 0
+        self._ignore_toggle_until = time.time() + 0.3
 
         for dev in self._keyboards + self._mice:
             try:
@@ -281,6 +283,8 @@ class InputMonitor:
                         if (event.type == ecodes.EV_KEY and
                                 event.code == self._toggle_keycode and
                                 event.value == 1):
+                            if time.time() < self._ignore_toggle_until:
+                                continue
                             self._leave_remote()
                             break
                         if event.type == ecodes.EV_REL:

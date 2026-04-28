@@ -11,7 +11,7 @@ import time
 # Adjust path so sibling imports work when run directly
 sys.path.insert(0, os.path.dirname(__file__))
 
-from evdev import InputEvent, ecodes
+from evdev import ecodes
 
 from bt_hid import BluetoothHID
 from clipboard_sync import ClipboardSync

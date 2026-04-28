@@ -4,7 +4,6 @@
   "edge_threshold": 3,
   "return_threshold": 80,
   "mouse_speed_multiplier": 1.0,
-  "capture_method": "x11",
   "clipboard_sync": true,
   "toggle_key": "KEY_PAUSE",
   "mouse_return": false

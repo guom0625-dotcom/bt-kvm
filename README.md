@@ -3,15 +3,13 @@
 Linux의 키보드·마우스를 Bluetooth로 Android에 공유하는 KVM 도구입니다.  
 마우스가 화면 경계를 넘으면 자동으로 Android를 제어하고, 클립보드도 양방향 동기화됩니다.
 
-> Barrier처럼 동작하지만 네트워크 대신 **Bluetooth**를 사용합니다.
-
 ---
 
 ## 동작 방식
 
 ```
-Windows/Linux (물리 키보드·마우스)
-        │  Barrier (선택)
+PC에 직접 연결된 키보드·마우스 (USB / BT)
+        │  /dev/input (evdev grab)
         ▼
    Linux Ubuntu (X11)
         │  Bluetooth HID  ← 키보드·마우스
@@ -39,8 +37,7 @@ Windows/Linux (물리 키보드·마우스)
 | 패키지 | `bluez`, `xclip`, `python3-dbus` |
 | Python 라이브러리 | `evdev`, `python-xlib` |
 
-> **Wayland는 지원하지 않습니다.** X11 세션으로 로그인하세요.  
-> Barrier를 사용 중이라면 이미 X11일 가능성이 높습니다.
+> **Wayland는 지원하지 않습니다.** X11 세션으로 로그인하세요.
 
 ### Android (클라이언트)
 
@@ -162,8 +159,9 @@ sudo python3 server/main.py
   "edge_threshold":         3,
   "return_threshold":       80,
   "mouse_speed_multiplier": 1.0,
-  "capture_method":         "auto",
-  "clipboard_sync":         true
+  "clipboard_sync":         true,
+  "toggle_key":             "KEY_PAUSE",
+  "mouse_return":           false
 }
 ```
 
@@ -174,45 +172,14 @@ sudo python3 server/main.py
 | `edge_threshold` | `3` | 경계 감지 픽셀 거리 (작을수록 민감) |
 | `return_threshold` | `80` | Linux 복귀를 위해 반대 방향으로 밀어야 하는 픽셀 |
 | `mouse_speed_multiplier` | `1.0` | Android에서의 마우스 속도 배율 |
-| `capture_method` | `"auto"` | `auto` / `evdev` / `x11` (아래 참고) |
 | `clipboard_sync` | `true` | 클립보드 동기화 활성화 여부 |
-
-### `capture_method` 선택 기준
-
-| 값 | 설명 | 사용 케이스 |
-|----|------|-------------|
-| `auto` | evdev 우선, 없으면 x11 | 기본값 |
-| `evdev` | `/dev/input` 직접 캡처 | 물리 키보드·마우스가 Linux에 연결된 경우 |
-| `x11` | XGrabKeyboard + XGrabPointer | **Barrier 사용 중인 경우** |
+| `toggle_key` | `"KEY_PAUSE"` | Linux 복귀 토글 키 (evdev 키 이름) |
+| `mouse_return` | `true` | 반대 방향 밀기로 복귀 활성화 여부 |
 
 ### CLI 인자 (일회성 override)
 
 ```bash
 sudo python3 server/main.py --edge left --speed 1.5
-```
-
----
-
-## Barrier와 함께 사용하기
-
-Windows PC의 키보드·마우스를 Barrier로 Ubuntu에서 사용 중이라면:
-
-```bash
-python3 configure.py
-# → 캡처 방식: 3) x11 선택
-```
-
-또는 `config.json`에서:
-
-```json
-"capture_method": "x11"
-```
-
-Barrier가 X11 XTEST로 이벤트를 주입하기 때문에 `/dev/input`에는 나타나지 않습니다.  
-`x11` 모드는 XGrab으로 X11 레벨에서 캡처하므로 Barrier 이벤트도 정상 처리됩니다.
-
-```
-Windows (물리 HW) → Barrier → Ubuntu X11 → XGrab 캡처 → BT HID → Android
 ```
 
 ---
@@ -264,8 +231,7 @@ bt-kvm/
 ├── server/
 │   ├── main.py              # 진입점
 │   ├── bt_hid.py            # Bluetooth HID 주변 장치 (L2CAP)
-│   ├── input_monitor.py     # X11 경계 감지 + 입력 캡처
-│   ├── x11_grab.py          # X11 grab 캡처 백엔드 (Barrier용)
+│   ├── input_monitor.py     # X11 경계 감지 + evdev 캡처
 │   ├── hid_reports.py       # HID 리포트 디스크립터 및 변환
 │   └── clipboard_sync.py    # 클립보드 RFCOMM 서버
 └── android/

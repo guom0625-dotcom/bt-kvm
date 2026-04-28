@@ -216,6 +216,20 @@ class InputMonitor:
             except Exception as e:
                 logger.warning(f"evdev grab {dev.path}: {e}")
 
+        # Drain stale events queued in fd buffers while we were not reading
+        # (the kernel buffers events on every open fd regardless of grab).
+        # Without this, re-entry replays seconds of PC activity into the BT
+        # link as a flood of mouse deltas, causing growing perceived lag.
+        drained = 0
+        for dev in self._keyboards + self._mice:
+            try:
+                for _ in dev.read():
+                    drained += 1
+            except BlockingIOError:
+                pass
+        if drained:
+            logger.info(f"evdev drain on enter: {drained} stale events")
+
         cx = self._mon_x + self._mon_w // 2
         cy = self._mon_y + self._mon_h // 2
         self._warp(cx, cy)

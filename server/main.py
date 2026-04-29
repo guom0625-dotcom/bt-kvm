@@ -47,6 +47,12 @@ class HIDSender:
     of accumulating during BT slowdowns.
     """
 
+    # Mouse motion send floor. Slightly above the CSR air rate
+    # (~12ms/packet observed) so the kernel L2CAP queue drains faster than
+    # we feed it. Without this, sends complete instantly into a deep kernel
+    # buffer and stale positions accumulate behind the air bottleneck.
+    MOUSE_MIN_INTERVAL = 0.013
+
     def __init__(self, hid):
         self._hid = hid
         self._cond = threading.Condition()
@@ -90,6 +96,7 @@ class HIDSender:
             self._mouse_slot = None
 
     def _loop(self):
+        last_mouse_send = 0.0
         while True:
             with self._cond:
                 while (self._running
@@ -98,12 +105,37 @@ class HIDSender:
                     self._cond.wait(timeout=0.5)
                 if not self._running:
                     return
+
                 if self._critical_q:
                     report = self._critical_q.popleft()
+                    is_mouse = False
                 else:
-                    report = self._mouse_slot
-                    self._mouse_slot = None
+                    # mouse motion: throttle so the kernel L2CAP queue stays
+                    # at depth 1 and the slot has time to coalesce updates
+                    wait = self.MOUSE_MIN_INTERVAL - (time.time() - last_mouse_send)
+                    if wait > 0:
+                        # release lock during wait so producer can replace slot
+                        # and a critical report can preempt
+                        self._cond.wait(timeout=wait)
+                        if not self._running:
+                            return
+                        if self._critical_q:
+                            report = self._critical_q.popleft()
+                            is_mouse = False
+                        elif self._mouse_slot is not None:
+                            report = self._mouse_slot
+                            self._mouse_slot = None
+                            is_mouse = True
+                        else:
+                            continue
+                    else:
+                        report = self._mouse_slot
+                        self._mouse_slot = None
+                        is_mouse = True
+
             self._hid.send(report)
+            if is_mouse:
+                last_mouse_send = time.time()
 
 
 def load_config() -> dict:

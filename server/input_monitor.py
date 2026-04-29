@@ -44,6 +44,7 @@ class InputMonitor:
         self._virt_x = 0
         self._virt_y = 0
         self._ignore_toggle_until = 0.0
+        self._drop_events_before = 0.0
 
         # evdev kernel→Python arrival-lag stats (sampled every N REL events)
         self._lag_n = 0
@@ -216,7 +217,9 @@ class InputMonitor:
         self.remote_mode = True
         self._virt_x = 0
         self._virt_y = 0
-        self._ignore_toggle_until = time.time() + 0.3
+        now = time.time()
+        self._ignore_toggle_until = now + 0.3
+        self._drop_events_before = now
 
         for dev in self._keyboards + self._mice:
             try:
@@ -242,8 +245,7 @@ class InputMonitor:
         cy = self._mon_y + self._mon_h // 2
         self._warp(cx, cy)
 
-        ret = RETURN_EDGE[self._config.get('edge', 'right')]
-        logger.info(f">>> Android  (마우스를 {ret}으로 밀거나 {self._config.get('toggle_key','KEY_PAUSE')} 복귀)")
+        logger.info(f">>> Android  ({self._config.get('toggle_key','KEY_PAUSE')} 복귀)")
         self._on_enter_remote()
 
     def _leave_remote(self):
@@ -329,6 +331,8 @@ class InputMonitor:
                                 f"(dt={time.time()-self._ignore_toggle_until+0.3:.3f}s after enter)")
                             self._leave_remote()
                             break
+                        if event.timestamp() < self._drop_events_before:
+                            continue
                         if event.type == ecodes.EV_REL:
                             if event.code == ecodes.REL_X:
                                 self._virt_x += event.value

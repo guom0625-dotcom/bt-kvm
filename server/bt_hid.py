@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Optional
 
 from hid_reports import HID_DESCRIPTOR
 
@@ -85,9 +84,6 @@ class BluetoothHID:
         self._ctrl_client = None
         self._intr_client = None
         self.connected = False
-        self.peer_mac = ""
-        self._reconnect_stop = threading.Event()
-        self._reconnect_thread: Optional[threading.Thread] = None
 
     def setup(self):
         """Configure BT adapter as HID peripheral and register SDP record."""
@@ -354,9 +350,7 @@ class BluetoothHID:
         self._intr_client, intr_addr = results['intr']
         logger.info(f"Control channel: {ctrl_addr[0]}")
         logger.info(f"Interrupt channel: {intr_addr[0]}")
-        self.peer_mac = ctrl_addr[0]
         self.connected = True
-        self._reconnect_stop.set()  # halt any pending paging attempts
 
     def send(self, report: bytes):
         if not self.connected:
@@ -369,7 +363,6 @@ class BluetoothHID:
 
     def close(self):
         self.connected = False
-        self._reconnect_stop.set()
         for s in [self._ctrl_client, self._intr_client,
                   self._ctrl_server, self._intr_server]:
             if s:
@@ -379,33 +372,6 @@ class BluetoothHID:
                     pass
         self._ctrl_client = self._intr_client = None
         self._ctrl_server = self._intr_server = None
-
-    def start_auto_reconnect(self, mac: str, interval: float = 5.0):
-        """Periodically page a paired phone so it reverse-connects to PSM 17/19.
-
-        Stops as soon as listen() succeeds or close() is called.
-        """
-        if not mac:
-            return
-        if self._reconnect_thread and self._reconnect_thread.is_alive():
-            return
-        self._reconnect_stop.clear()
-
-        def _loop():
-            logger.info(f"Auto-reconnect: paging {mac} every {interval:.0f}s")
-            while not self._reconnect_stop.is_set() and not self.connected:
-                try:
-                    subprocess.run(
-                        ['hcitool', '-i', self._adapter, 'cc', mac],
-                        capture_output=True, timeout=8,
-                    )
-                except Exception as e:
-                    logger.debug(f"page {mac}: {e}")
-                self._reconnect_stop.wait(interval)
-
-        self._reconnect_thread = threading.Thread(
-            target=_loop, daemon=True, name="bt-reconnect")
-        self._reconnect_thread.start()
 
     @staticmethod
     def _make_l2cap_socket(psm: int, bdaddr: str = "") -> socket.socket:

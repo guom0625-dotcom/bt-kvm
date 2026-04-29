@@ -232,27 +232,9 @@ def main():
     if config.get('clipboard_sync', True):
         clip.start()
 
-    def _save_phone_mac(mac: str):
-        if not mac or config.get('phone_mac') == mac:
-            return
-        config['phone_mac'] = mac
-        try:
-            with open(CONFIG_PATH, 'w') as f:
-                json.dump(config, f, indent=2)
-            logger.info(f"Saved phone MAC for auto-reconnect: {mac}")
-        except OSError as e:
-            logger.warning(f"Could not save phone MAC: {e}")
-
     def reconnect_loop():
         while True:
-            phone_mac = config.get('phone_mac', '')
-            if phone_mac:
-                logger.info(f"Pair '{device_name}' on Android once; "
-                            f"auto-reconnecting to {phone_mac}.")
-                hid.start_auto_reconnect(phone_mac)
-            else:
-                logger.info(f"Pair '{device_name}' from Android BT settings, "
-                            "then connect.")
+            logger.info(f"Pair '{device_name}' from Android BT settings, then connect.")
             try:
                 hid.listen()
             except KeyboardInterrupt:
@@ -261,8 +243,6 @@ def main():
                 logger.error(f"listen() failed: {e}")
                 time.sleep(3)
                 continue
-
-            _save_phone_mac(hid.peer_mac)
 
             logger.info(f"Android connected! "
                         f"Move mouse to the {config.get('edge','right')} edge "

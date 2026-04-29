@@ -6,7 +6,9 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
+from collections import deque
 
 # Adjust path so sibling imports work when run directly
 sys.path.insert(0, os.path.dirname(__file__))
@@ -31,6 +33,77 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', 'config.json')
+
+
+class HIDSender:
+    """Decouples evdev event production from BT HID transmission.
+
+    Two lanes:
+      critical (FIFO): keyboard / mouse-button reports — never coalesced
+      mouse    (single slot): motion reports — newer overwrites older
+
+    The sender thread is the sole caller of hid.send(), so kernel L2CAP
+    queue depth stays at 1, and stale mouse positions are dropped instead
+    of accumulating during BT slowdowns.
+    """
+
+    def __init__(self, hid):
+        self._hid = hid
+        self._cond = threading.Condition()
+        self._critical_q: deque = deque()
+        self._mouse_slot = None
+        self._running = False
+        self._thread = None
+        self._dropped = 0
+        self._dropped_log_every = 500
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="hid-sender")
+        self._thread.start()
+
+    def stop(self):
+        with self._cond:
+            self._running = False
+            self._cond.notify_all()
+
+    def enqueue_critical(self, report: bytes):
+        with self._cond:
+            self._critical_q.append(report)
+            self._cond.notify()
+
+    def enqueue_mouse(self, report: bytes):
+        with self._cond:
+            if self._mouse_slot is not None:
+                self._dropped += 1
+                if self._dropped % self._dropped_log_every == 0:
+                    logger.info(
+                        f"mouse coalesce: {self._dropped} stale reports dropped")
+            self._mouse_slot = report
+            self._cond.notify()
+
+    def clear_mouse(self):
+        with self._cond:
+            self._mouse_slot = None
+
+    def _loop(self):
+        while True:
+            with self._cond:
+                while (self._running
+                       and not self._critical_q
+                       and self._mouse_slot is None):
+                    self._cond.wait(timeout=0.5)
+                if not self._running:
+                    return
+                if self._critical_q:
+                    report = self._critical_q.popleft()
+                else:
+                    report = self._mouse_slot
+                    self._mouse_slot = None
+            self._hid.send(report)
 
 
 def load_config() -> dict:
@@ -82,26 +155,29 @@ def main():
 
     hid = BluetoothHID(device_name=device_name, adapter=adapter)
     state = HIDState()
+    sender = HIDSender(hid)
 
     def on_enter_remote():
         pass  # nothing extra needed; monitor already grabbed devices
 
     def on_leave_remote():
-        # release any held keys/buttons
+        # drop any pending motion; deliver final button/key release reliably
+        sender.clear_mouse()
         for _, report in state.release_all():
-            hid.send(report)
+            sender.enqueue_critical(report)
 
     monitor = InputMonitor(config, on_enter_remote, on_leave_remote)
 
     def on_event(event):
         et = event.type
-        reports = None
 
         if et == ecodes.EV_KEY:
             if event.code in _MOUSE_BTNS:
                 reports = state.handle_mouse_button(event.code, event.value)
             else:
                 reports = state.handle_key(event.code, event.value)
+            for _, report in reports:
+                sender.enqueue_critical(report)
 
         elif et == ecodes.EV_REL:
             code = event.code
@@ -112,16 +188,20 @@ def main():
 
         elif et == ecodes.EV_SYN:
             reports = state.flush_mouse()
-
-        if reports:
-            for _, report in reports:
-                hid.send(report)
+            if len(reports) == 1:
+                sender.enqueue_mouse(reports[0][1])
+            else:
+                # large flick split into >127 chunks: send all in order so
+                # cumulative motion isn't lost to coalescing
+                for _, report in reports:
+                    sender.enqueue_critical(report)
 
     monitor.event_callback = on_event
 
     # ---------- setup ----------
     logger.info("Setting up Bluetooth HID peripheral...")
     hid.setup()
+    sender.start()
 
     clip = ClipboardSync()
     if config.get('clipboard_sync', True):
@@ -159,6 +239,7 @@ def main():
     def shutdown(sig, frame):
         logger.info("Shutting down...")
         monitor.stop()
+        sender.stop()
         clip.stop()
         hid.close()
         sys.exit(0)

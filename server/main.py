@@ -60,8 +60,6 @@ class HIDSender:
         self._mouse_slot = None
         self._running = False
         self._thread = None
-        self._dropped = 0
-        self._dropped_log_every = 500
 
     def start(self):
         if self._running:
@@ -83,11 +81,6 @@ class HIDSender:
 
     def enqueue_mouse(self, report: bytes):
         with self._cond:
-            if self._mouse_slot is not None:
-                self._dropped += 1
-                if self._dropped % self._dropped_log_every == 0:
-                    logger.info(
-                        f"mouse coalesce: {self._dropped} stale reports dropped")
             self._mouse_slot = report
             self._cond.notify()
 

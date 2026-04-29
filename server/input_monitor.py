@@ -46,13 +46,6 @@ class InputMonitor:
         self._ignore_toggle_until = 0.0
         self._drop_events_before = 0.0
 
-        # evdev kernel→Python arrival-lag stats (sampled every N REL events)
-        self._lag_n = 0
-        self._lag_sum = 0.0
-        self._lag_max = 0.0
-        self._lag_min = float('inf')
-        self._LAG_WINDOW = 200
-
         keyname = config.get('toggle_key', 'KEY_PAUSE')
         self._toggle_keycode = getattr(ecodes, keyname, ecodes.KEY_PAUSE)
 
@@ -134,7 +127,6 @@ class InputMonitor:
                 if ev.type == X.KeyPress and ev.detail - 8 == self._toggle_keycode:
                     if time.time() < self._ignore_toggle_until:
                         continue
-                    logger.info(f"toggle from X11 (mode={'remote' if self.remote_mode else 'local'})")
                     self._poll_display.ungrab_keyboard(X.CurrentTime)
                     self._poll_display.flush()
                     if self.remote_mode:
@@ -231,15 +223,12 @@ class InputMonitor:
         # (the kernel buffers events on every open fd regardless of grab).
         # Without this, re-entry replays seconds of PC activity into the BT
         # link as a flood of mouse deltas, causing growing perceived lag.
-        drained = 0
         for dev in self._keyboards + self._mice:
             try:
                 for _ in dev.read():
-                    drained += 1
+                    pass
             except BlockingIOError:
                 pass
-        if drained:
-            logger.info(f"evdev drain on enter: {drained} stale events")
 
         cx = self._mon_x + self._mon_w // 2
         cy = self._mon_y + self._mon_h // 2
@@ -326,9 +315,6 @@ class InputMonitor:
                                 event.value == 1):
                             if time.time() < self._ignore_toggle_until:
                                 continue
-                            logger.info(
-                                f"toggle leave from evdev "
-                                f"(dt={time.time()-self._ignore_toggle_until+0.3:.3f}s after enter)")
                             self._leave_remote()
                             break
                         if event.timestamp() < self._drop_events_before:
@@ -336,22 +322,6 @@ class InputMonitor:
                         if event.type == ecodes.EV_REL:
                             if event.code == ecodes.REL_X:
                                 self._virt_x += event.value
-                                lag = time.time() - event.timestamp()
-                                self._lag_sum += lag
-                                self._lag_n += 1
-                                if lag > self._lag_max: self._lag_max = lag
-                                if lag < self._lag_min: self._lag_min = lag
-                                if self._lag_n >= self._LAG_WINDOW:
-                                    avg_ms = (self._lag_sum / self._lag_n) * 1000
-                                    logger.info(
-                                        f"evdev arrival lag (n={self._lag_n}): "
-                                        f"min={self._lag_min*1000:.1f}ms "
-                                        f"avg={avg_ms:.1f}ms "
-                                        f"max={self._lag_max*1000:.1f}ms")
-                                    self._lag_n = 0
-                                    self._lag_sum = 0.0
-                                    self._lag_max = 0.0
-                                    self._lag_min = float('inf')
                             elif event.code == ecodes.REL_Y:
                                 self._virt_y += event.value
                             if (self._config.get('mouse_return', True) and

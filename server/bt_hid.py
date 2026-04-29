@@ -84,7 +84,12 @@ class BluetoothHID:
         self._ctrl_client = None
         self._intr_client = None
         self.connected = False
-        self._send_count = 0
+        # HID write-duration stats (sampled every N sends)
+        self._send_n = 0
+        self._send_sum = 0.0
+        self._send_max = 0.0
+        self._send_min = float('inf')
+        self._SEND_WINDOW = 200
 
     def setup(self):
         """Configure BT adapter as HID peripheral and register SDP record."""
@@ -356,13 +361,25 @@ class BluetoothHID:
     def send(self, report: bytes):
         if not self.connected:
             return
-        if self._send_count < 50:
-            rid = report[1] if len(report) > 1 else 0
-            tag = 'kb' if rid == 1 else 'mouse' if rid == 2 else f'r{rid:02x}'
-            logger.info(f"HID send #{self._send_count} ({tag}): {report.hex()}")
-            self._send_count += 1
         try:
+            t0 = time.time()
             self._intr_client.send(report)
+            dt = time.time() - t0
+            self._send_sum += dt
+            self._send_n += 1
+            if dt > self._send_max: self._send_max = dt
+            if dt < self._send_min: self._send_min = dt
+            if self._send_n >= self._SEND_WINDOW:
+                avg_ms = (self._send_sum / self._send_n) * 1000
+                logger.info(
+                    f"HID write (n={self._send_n}): "
+                    f"min={self._send_min*1000:.2f}ms "
+                    f"avg={avg_ms:.2f}ms "
+                    f"max={self._send_max*1000:.2f}ms")
+                self._send_n = 0
+                self._send_sum = 0.0
+                self._send_max = 0.0
+                self._send_min = float('inf')
         except OSError as e:
             logger.warning(f"BT send error: {e}")
             self.connected = False

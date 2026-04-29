@@ -45,6 +45,13 @@ class InputMonitor:
         self._virt_y = 0
         self._ignore_toggle_until = 0.0
 
+        # evdev kernel→Python arrival-lag stats (sampled every N REL events)
+        self._lag_n = 0
+        self._lag_sum = 0.0
+        self._lag_max = 0.0
+        self._lag_min = float('inf')
+        self._LAG_WINDOW = 200
+
         keyname = config.get('toggle_key', 'KEY_PAUSE')
         self._toggle_keycode = getattr(ecodes, keyname, ecodes.KEY_PAUSE)
 
@@ -325,6 +332,22 @@ class InputMonitor:
                         if event.type == ecodes.EV_REL:
                             if event.code == ecodes.REL_X:
                                 self._virt_x += event.value
+                                lag = time.time() - event.timestamp()
+                                self._lag_sum += lag
+                                self._lag_n += 1
+                                if lag > self._lag_max: self._lag_max = lag
+                                if lag < self._lag_min: self._lag_min = lag
+                                if self._lag_n >= self._LAG_WINDOW:
+                                    avg_ms = (self._lag_sum / self._lag_n) * 1000
+                                    logger.info(
+                                        f"evdev arrival lag (n={self._lag_n}): "
+                                        f"min={self._lag_min*1000:.1f}ms "
+                                        f"avg={avg_ms:.1f}ms "
+                                        f"max={self._lag_max*1000:.1f}ms")
+                                    self._lag_n = 0
+                                    self._lag_sum = 0.0
+                                    self._lag_max = 0.0
+                                    self._lag_min = float('inf')
                             elif event.code == ecodes.REL_Y:
                                 self._virt_y += event.value
                             if (self._config.get('mouse_return', True) and

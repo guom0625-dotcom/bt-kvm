@@ -391,16 +391,26 @@ class BluetoothHID:
             logger.warning(f"BT send error: {e}")
             self.connected = False
 
-    def try_wake(self, peer_mac: str):
-        """Page peer by L2CAP-connecting to its SDP PSM, then close.
+    _WAKE_HOLD_SECS = 10.0
+    _WAKE_DEBOUNCE_SECS = 3.0
 
-        Goal: bring up the ACL link from PC side. Once the link is up, the
-        peer (if it has us paired) typically auto-reconnects the HID
-        profile, which our existing listen() will accept.
+    def try_wake(self, peer_mac: str):
+        """Page peer by L2CAP-connecting to its SDP PSM and hold the link.
+
+        Closing the SDP socket immediately tears the ACL link back down
+        before Android has time to react. Holding the socket open keeps
+        the link alive long enough for Android to notice the paired
+        device and initiate HID profile reconnect — which our existing
+        listen() then accepts.
         """
+        now = time.time()
         if self.connected:
             logger.info("Wake: already connected, skipping")
             return
+        if now - getattr(self, '_last_wake', 0) < self._WAKE_DEBOUNCE_SECS:
+            return  # debounce duplicate presses
+        self._last_wake = now
+
         bdaddr = self._get_local_bdaddr()
         if not bdaddr:
             logger.warning("Wake: no local BD addr")
@@ -413,7 +423,15 @@ class BluetoothHID:
             s.settimeout(8.0)
             logger.info(f"Wake: paging {peer_mac} via SDP...")
             s.connect((peer_mac, 1))
-            logger.info(f"Wake: ACL link up to {peer_mac}")
+            logger.info(f"Wake: ACL link up, holding {self._WAKE_HOLD_SECS:.0f}s "
+                        "for phone to initiate HID reconnect...")
+            deadline = time.time() + self._WAKE_HOLD_SECS
+            while time.time() < deadline and not self.connected:
+                time.sleep(0.25)
+            if self.connected:
+                logger.info("Wake: phone reconnected HID")
+            else:
+                logger.warning("Wake: phone did not reconnect during hold window")
         except OSError as e:
             logger.warning(f"Wake: connect to {peer_mac} failed: {e}")
         finally:

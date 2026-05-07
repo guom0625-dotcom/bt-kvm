@@ -257,6 +257,7 @@ class InputMonitor:
 
     def start(self):
         self._running = True
+        self._register_toggle_hotkey()
         self._edge_thread = threading.Thread(
             target=self._edge_loop, daemon=True, name="edge-detect")
         self._event_thread = threading.Thread(

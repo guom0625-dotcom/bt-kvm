@@ -259,7 +259,6 @@ def main():
             logger.warning("BT disconnected. Waiting for reconnect...")
             monitor.stop()
             hid.close()
-            hid.setup()
 
     def shutdown(sig, frame):
         logger.info("Shutting down...")

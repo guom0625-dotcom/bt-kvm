@@ -16,18 +16,33 @@ RETURN_EDGE = {'right': 'left', 'left': 'right',
                'top': 'bottom', 'bottom': 'top'}
 
 
+def _classify(dev) -> Optional[str]:
+    try:
+        caps = dev.capabilities()
+    except OSError:
+        return None
+    if ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY]:
+        return 'keyboard'
+    if ecodes.EV_REL in caps and ecodes.REL_X in caps[ecodes.EV_REL]:
+        return 'mouse'
+    return None
+
+
 def _find_keyboards_and_mice():
     keyboards, mice = [], []
     for path in list_devices():
         try:
             dev = InputDevice(path)
-            caps = dev.capabilities()
-            if ecodes.EV_KEY in caps and ecodes.KEY_A in caps[ecodes.EV_KEY]:
-                keyboards.append(dev)
-            elif ecodes.EV_REL in caps and ecodes.REL_X in caps[ecodes.EV_REL]:
-                mice.append(dev)
         except Exception:
-            pass
+            continue
+        kind = _classify(dev)
+        if kind == 'keyboard':
+            keyboards.append(dev)
+        elif kind == 'mouse':
+            mice.append(dev)
+        else:
+            try: dev.close()
+            except Exception: pass
     return keyboards, mice
 
 
@@ -56,11 +71,15 @@ class InputMonitor:
             raise RuntimeError("No evdev input devices found. Run as root?")
         self._keyboards = keyboards
         self._mice = mice
+        self._dev_lock = threading.Lock()
         logger.info(f"evdev: {len(keyboards)} keyboard(s), {len(mice)} mouse/mice")
 
         self._running = False
         self._edge_thread: Optional[threading.Thread] = None
         self._event_thread: Optional[threading.Thread] = None
+        self._watcher_thread = threading.Thread(
+            target=self._device_watch_loop, daemon=True, name="evdev-watch")
+        self._watcher_thread.start()
 
     # ------------------------------------------------------------------ #
     # X11 init (edge detection + hotkey passive grab only)
@@ -213,22 +232,37 @@ class InputMonitor:
         self._ignore_toggle_until = now + 0.3
         self._drop_events_before = now
 
-        for dev in self._keyboards + self._mice:
+        with self._dev_lock:
+            devs = list(self._keyboards + self._mice)
+
+        dead = []
+        for dev in devs:
             try:
                 dev.grab()
+            except OSError as e:
+                if e.errno == 19:  # ENODEV
+                    dead.append(dev)
+                else:
+                    logger.warning(f"evdev grab {dev.path}: {e}")
             except Exception as e:
                 logger.warning(f"evdev grab {dev.path}: {e}")
+        for d in dead:
+            self._drop_dead_device(d)
 
         # Drain stale events queued in fd buffers while we were not reading
         # (the kernel buffers events on every open fd regardless of grab).
         # Without this, re-entry replays seconds of PC activity into the BT
         # link as a flood of mouse deltas, causing growing perceived lag.
-        for dev in self._keyboards + self._mice:
+        with self._dev_lock:
+            devs = list(self._keyboards + self._mice)
+        for dev in devs:
             try:
                 for _ in dev.read():
                     pass
             except BlockingIOError:
                 pass
+            except OSError:
+                self._drop_dead_device(dev)
 
         cx = self._mon_x + self._mon_w // 2
         cy = self._mon_y + self._mon_h // 2
@@ -243,7 +277,9 @@ class InputMonitor:
         self.remote_mode = False
         self._ignore_toggle_until = time.time() + 0.3
 
-        for dev in self._keyboards + self._mice:
+        with self._dev_lock:
+            devs = list(self._keyboards + self._mice)
+        for dev in devs:
             try:
                 dev.ungrab()
             except Exception:
@@ -251,6 +287,57 @@ class InputMonitor:
 
         logger.info("<<< Linux")
         self._on_leave_remote()
+
+    def _drop_dead_device(self, dev):
+        with self._dev_lock:
+            if dev in self._keyboards:
+                self._keyboards.remove(dev)
+            elif dev in self._mice:
+                self._mice.remove(dev)
+        try:
+            dev.close()
+        except Exception:
+            pass
+        logger.info(f"evdev: dropped {dev.path}")
+
+    def _device_watch_loop(self):
+        """Pick up newly added keyboards/mice (USB hot-plug, BT pair)."""
+        while True:
+            try:
+                with self._dev_lock:
+                    existing = {d.path for d in self._keyboards + self._mice}
+                new_kbds, new_mice = [], []
+                for path in list_devices():
+                    if path in existing:
+                        continue
+                    try:
+                        dev = InputDevice(path)
+                    except Exception:
+                        continue
+                    kind = _classify(dev)
+                    if kind == 'keyboard':
+                        new_kbds.append(dev)
+                    elif kind == 'mouse':
+                        new_mice.append(dev)
+                    else:
+                        try: dev.close()
+                        except Exception: pass
+                if new_kbds or new_mice:
+                    if self.remote_mode:
+                        for d in new_kbds + new_mice:
+                            try:
+                                d.grab()
+                            except Exception as e:
+                                logger.warning(f"grab new {d.path}: {e}")
+                    with self._dev_lock:
+                        self._keyboards.extend(new_kbds)
+                        self._mice.extend(new_mice)
+                    logger.info(
+                        f"evdev: +{len(new_kbds)} kbd, +{len(new_mice)} mouse "
+                        f"(total {len(self._keyboards)}/{len(self._mice)})")
+            except Exception as e:
+                logger.debug(f"watcher: {e}")
+            time.sleep(2.0)
 
     # ------------------------------------------------------------------ #
     # Thread loops
@@ -299,10 +386,15 @@ class InputMonitor:
             if not self.remote_mode:
                 time.sleep(0.02)
                 continue
-            fd_map = {d.fd: d for d in self._keyboards + self._mice}
+            with self._dev_lock:
+                fd_map = {d.fd: d for d in self._keyboards + self._mice}
+            if not fd_map:
+                time.sleep(0.05)
+                continue
             try:
                 readable, _, _ = select.select(fd_map, [], [], 0.1)
-            except Exception:
+            except (OSError, ValueError):
+                # fd closed under us (device unplugged); next iteration rebuilds
                 time.sleep(0.01)
                 continue
             for fd in readable:
@@ -332,4 +424,4 @@ class InputMonitor:
                         if self.event_callback:
                             self.event_callback(event)
                 except OSError:
-                    pass
+                    self._drop_dead_device(dev)

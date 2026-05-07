@@ -391,6 +391,37 @@ class BluetoothHID:
             logger.warning(f"BT send error: {e}")
             self.connected = False
 
+    def try_wake(self, peer_mac: str):
+        """Page peer by L2CAP-connecting to its SDP PSM, then close.
+
+        Goal: bring up the ACL link from PC side. Once the link is up, the
+        peer (if it has us paired) typically auto-reconnects the HID
+        profile, which our existing listen() will accept.
+        """
+        if self.connected:
+            logger.info("Wake: already connected, skipping")
+            return
+        bdaddr = self._get_local_bdaddr()
+        if not bdaddr:
+            logger.warning("Wake: no local BD addr")
+            return
+        s = socket.socket(socket.AF_BLUETOOTH,
+                          socket.SOCK_SEQPACKET,
+                          socket.BTPROTO_L2CAP)
+        try:
+            s.bind((bdaddr, 0))
+            s.settimeout(8.0)
+            logger.info(f"Wake: paging {peer_mac} via SDP...")
+            s.connect((peer_mac, 1))
+            logger.info(f"Wake: ACL link up to {peer_mac}")
+        except OSError as e:
+            logger.warning(f"Wake: connect to {peer_mac} failed: {e}")
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+
     def close(self):
         self.connected = False
         for s in [self._ctrl_client, self._intr_client,

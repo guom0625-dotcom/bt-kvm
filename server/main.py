@@ -193,6 +193,15 @@ def main():
 
     monitor = InputMonitor(config, on_enter_remote, on_leave_remote)
 
+    phone_mac = config.get('phone_mac', '')
+    def on_wake_key():
+        if not phone_mac:
+            logger.warning("Wake key pressed but no phone_mac in config.json")
+            return
+        threading.Thread(target=hid.try_wake, args=(phone_mac,),
+                         daemon=True, name="wake").start()
+    monitor.wake_callback = on_wake_key
+
     def on_event(event):
         et = event.type
 
@@ -227,6 +236,7 @@ def main():
     logger.info("Setting up Bluetooth HID peripheral...")
     hid.setup()
     sender.start()
+    monitor.start_polling()
 
     clip = ClipboardSync()
     if config.get('clipboard_sync', True):

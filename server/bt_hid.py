@@ -1,6 +1,7 @@
 """Bluetooth HID peripheral: Linux acts as BT keyboard+mouse for Android."""
 import logging
 import os
+import select
 import socket
 import subprocess
 import tempfile
@@ -351,6 +352,35 @@ class BluetoothHID:
         logger.info(f"Control channel: {ctrl_addr[0]}")
         logger.info(f"Interrupt channel: {intr_addr[0]}")
         self.connected = True
+        threading.Thread(target=self._watchdog, daemon=True,
+                         name="bt-watchdog").start()
+
+    def _watchdog(self):
+        # Detect link loss when no send() is happening (e.g. phone out of
+        # range while in Linux mode). Without this, hid.connected stays True
+        # until the next send hits supervision timeout.
+        socks = [self._ctrl_client, self._intr_client]
+        while self.connected:
+            try:
+                readable, _, errored = select.select(socks, [], socks, 1.0)
+            except (OSError, ValueError):
+                self.connected = False
+                return
+            if errored:
+                logger.warning("BT link error (watchdog)")
+                self.connected = False
+                return
+            for s in readable:
+                try:
+                    data = s.recv(64)
+                except OSError:
+                    logger.warning("BT link dropped (watchdog recv)")
+                    self.connected = False
+                    return
+                if not data:
+                    logger.warning("BT link dropped (peer hangup)")
+                    self.connected = False
+                    return
 
     def send(self, report: bytes):
         if not self.connected:

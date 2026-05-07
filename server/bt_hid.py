@@ -344,17 +344,6 @@ class BluetoothHID:
         t_ctrl.join()
         t_intr.join()
 
-        if self.connected:
-            # try_wake established outgoing connections and closed our
-            # server sockets to interrupt the accept threads above.
-            for key in ('ctrl', 'intr'):
-                if key in results:
-                    try:
-                        results[key][0].close()
-                    except OSError:
-                        pass
-            logger.info("Wake path established HID connection")
-            return
         if errs:
             raise OSError(f"L2CAP accept failed: {errs}")
 
@@ -405,14 +394,13 @@ class BluetoothHID:
     _WAKE_DEBOUNCE_SECS = 3.0
 
     def try_wake(self, peer_mac: str):
-        """PC-initiated HID reconnect.
+        """Page peer via SDP to bring up the ACL link.
 
-        Phone listens on PSM 17/19 for device-initiated reconnect (per the
-        HID spec). We page it via SDP to bring up the ACL link, then open
-        outgoing L2CAP connections to its HID Control/Interrupt PSMs. Those
-        outgoing sockets serve the same role as the incoming ones in the
-        normal flow, so we hand them off and close the listening servers
-        to wake any blocked listen() in the reconnect loop.
+        NOTE: Android HID Host on this phone accepts outgoing PSM 17/19
+        L2CAP connections but does not register them as active input,
+        so PC-initiated HID reconnect doesn't actually deliver keystrokes.
+        Wake is kept as a reachability probe / future hook only — the
+        actual HID reconnect still has to come from the phone side.
         """
         now = time.time()
         if self.connected:
@@ -426,60 +414,23 @@ class BluetoothHID:
         if not bdaddr:
             logger.warning("Wake: no local BD addr")
             return
-
-        sdp = self._connect_l2cap(bdaddr, peer_mac, 1, timeout=8.0,
-                                  label="SDP-page")
-        if sdp is None:
-            return
-        logger.info(f"Wake: ACL link up to {peer_mac}")
-
-        ctrl = self._connect_l2cap(bdaddr, peer_mac, P_CTRL, timeout=5.0,
-                                   label="HID-Control")
-        if ctrl is None:
-            sdp.close()
-            return
-        intr = self._connect_l2cap(bdaddr, peer_mac, P_INTR, timeout=5.0,
-                                   label="HID-Interrupt")
-        if intr is None:
-            ctrl.close()
-            sdp.close()
-            return
-
-        # Hand off the outgoing sockets as our HID channels and unblock
-        # listen() by closing the server sockets it's accepting on.
-        self._ctrl_client = ctrl
-        self._intr_client = intr
-        self.connected = True
-        sdp.close()
-        for srv in (self._ctrl_server, self._intr_server):
-            if srv:
-                try:
-                    srv.close()
-                except OSError:
-                    pass
-        logger.info("Wake: HID reconnected from PC side")
-        threading.Thread(target=self._watchdog, daemon=True,
-                         name="bt-watchdog").start()
-
-    def _connect_l2cap(self, local_bdaddr: str, peer_mac: str,
-                       psm: int, timeout: float, label: str):
         s = socket.socket(socket.AF_BLUETOOTH,
                           socket.SOCK_SEQPACKET,
                           socket.BTPROTO_L2CAP)
         try:
-            s.bind((local_bdaddr, 0))
-            s.settimeout(timeout)
-            logger.info(f"Wake: connecting {label} (PSM {psm}) to {peer_mac}...")
-            s.connect((peer_mac, psm))
-            s.settimeout(None)
-            return s
+            s.bind((bdaddr, 0))
+            s.settimeout(8.0)
+            logger.info(f"Wake: paging {peer_mac} via SDP...")
+            s.connect((peer_mac, 1))
+            logger.info(f"Wake: ACL link up to {peer_mac} "
+                        "(phone must initiate HID reconnect itself)")
         except OSError as e:
-            logger.warning(f"Wake: {label} (PSM {psm}) failed: {e}")
+            logger.warning(f"Wake: paging {peer_mac} failed: {e}")
+        finally:
             try:
                 s.close()
             except OSError:
                 pass
-            return None
 
     def close(self):
         self.connected = False

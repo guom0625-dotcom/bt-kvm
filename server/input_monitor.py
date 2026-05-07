@@ -140,6 +140,8 @@ class InputMonitor:
                 if ev.type != X.KeyPress:
                     continue
                 kc = ev.detail - 8
+                logger.info(f"X11 KeyPress: detail={ev.detail} evdev={kc} "
+                            f"(wake={self._wake_keycode}, toggle={self._toggle_keycode})")
                 if kc == self._toggle_keycode:
                     if time.time() < self._ignore_toggle_until:
                         continue

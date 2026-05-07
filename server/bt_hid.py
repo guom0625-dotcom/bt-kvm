@@ -344,6 +344,17 @@ class BluetoothHID:
         t_ctrl.join()
         t_intr.join()
 
+        if self.connected:
+            # try_wake established outgoing connections and closed our
+            # server sockets to interrupt the accept threads above.
+            for key in ('ctrl', 'intr'):
+                if key in results:
+                    try:
+                        results[key][0].close()
+                    except OSError:
+                        pass
+            logger.info("Wake path established HID connection")
+            return
         if errs:
             raise OSError(f"L2CAP accept failed: {errs}")
 
@@ -391,76 +402,84 @@ class BluetoothHID:
             logger.warning(f"BT send error: {e}")
             self.connected = False
 
-    _WAKE_HOLD_SECS = 10.0
     _WAKE_DEBOUNCE_SECS = 3.0
 
     def try_wake(self, peer_mac: str):
-        """Page peer by L2CAP-connecting to its SDP PSM and hold the link.
+        """PC-initiated HID reconnect.
 
-        Closing the SDP socket immediately tears the ACL link back down
-        before Android has time to react. Holding the socket open keeps
-        the link alive long enough for Android to notice the paired
-        device and initiate HID profile reconnect — which our existing
-        listen() then accepts.
+        Phone listens on PSM 17/19 for device-initiated reconnect (per the
+        HID spec). We page it via SDP to bring up the ACL link, then open
+        outgoing L2CAP connections to its HID Control/Interrupt PSMs. Those
+        outgoing sockets serve the same role as the incoming ones in the
+        normal flow, so we hand them off and close the listening servers
+        to wake any blocked listen() in the reconnect loop.
         """
         now = time.time()
         if self.connected:
             logger.info("Wake: already connected, skipping")
             return
         if now - getattr(self, '_last_wake', 0) < self._WAKE_DEBOUNCE_SECS:
-            return  # debounce duplicate presses
+            return
         self._last_wake = now
 
         bdaddr = self._get_local_bdaddr()
         if not bdaddr:
             logger.warning("Wake: no local BD addr")
             return
+
+        sdp = self._connect_l2cap(bdaddr, peer_mac, 1, timeout=8.0,
+                                  label="SDP-page")
+        if sdp is None:
+            return
+        logger.info(f"Wake: ACL link up to {peer_mac}")
+
+        ctrl = self._connect_l2cap(bdaddr, peer_mac, P_CTRL, timeout=5.0,
+                                   label="HID-Control")
+        if ctrl is None:
+            sdp.close()
+            return
+        intr = self._connect_l2cap(bdaddr, peer_mac, P_INTR, timeout=5.0,
+                                   label="HID-Interrupt")
+        if intr is None:
+            ctrl.close()
+            sdp.close()
+            return
+
+        # Hand off the outgoing sockets as our HID channels and unblock
+        # listen() by closing the server sockets it's accepting on.
+        self._ctrl_client = ctrl
+        self._intr_client = intr
+        self.connected = True
+        sdp.close()
+        for srv in (self._ctrl_server, self._intr_server):
+            if srv:
+                try:
+                    srv.close()
+                except OSError:
+                    pass
+        logger.info("Wake: HID reconnected from PC side")
+        threading.Thread(target=self._watchdog, daemon=True,
+                         name="bt-watchdog").start()
+
+    def _connect_l2cap(self, local_bdaddr: str, peer_mac: str,
+                       psm: int, timeout: float, label: str):
         s = socket.socket(socket.AF_BLUETOOTH,
                           socket.SOCK_SEQPACKET,
                           socket.BTPROTO_L2CAP)
         try:
-            s.bind((bdaddr, 0))
-            s.settimeout(8.0)
-            logger.info(f"Wake: paging {peer_mac} via SDP...")
-            s.connect((peer_mac, 1))
-            logger.info(f"Wake: ACL link up, holding {self._WAKE_HOLD_SECS:.0f}s "
-                        "for phone to initiate HID reconnect...")
-            self._probe_peer_hid(bdaddr, peer_mac)
-            deadline = time.time() + self._WAKE_HOLD_SECS
-            while time.time() < deadline and not self.connected:
-                time.sleep(0.25)
-            if self.connected:
-                logger.info("Wake: phone reconnected HID")
-            else:
-                logger.warning("Wake: phone did not reconnect during hold window")
+            s.bind((local_bdaddr, 0))
+            s.settimeout(timeout)
+            logger.info(f"Wake: connecting {label} (PSM {psm}) to {peer_mac}...")
+            s.connect((peer_mac, psm))
+            s.settimeout(None)
+            return s
         except OSError as e:
-            logger.warning(f"Wake: connect to {peer_mac} failed: {e}")
-        finally:
+            logger.warning(f"Wake: {label} (PSM {psm}) failed: {e}")
             try:
                 s.close()
             except OSError:
                 pass
-
-    def _probe_peer_hid(self, local_bdaddr: str, peer_mac: str):
-        """Diagnostic: does the phone listen on PSM 17 (device-initiated HID
-        reconnect)? If yes, we can build a proper PC-initiated HID flow."""
-        for psm, name in [(17, 'HID-Control'), (19, 'HID-Interrupt')]:
-            s = socket.socket(socket.AF_BLUETOOTH,
-                              socket.SOCK_SEQPACKET,
-                              socket.BTPROTO_L2CAP)
-            try:
-                s.bind((local_bdaddr, 0))
-                s.settimeout(3.0)
-                s.connect((peer_mac, psm))
-                logger.info(f"Wake probe: peer ACCEPTED PSM {psm} ({name}) "
-                            "— phone listens for device-initiated reconnect")
-            except OSError as e:
-                logger.info(f"Wake probe: peer PSM {psm} ({name}) refused: {e}")
-            finally:
-                try:
-                    s.close()
-                except OSError:
-                    pass
+            return None
 
     def close(self):
         self.connected = False

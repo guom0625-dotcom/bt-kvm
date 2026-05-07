@@ -425,6 +425,7 @@ class BluetoothHID:
             s.connect((peer_mac, 1))
             logger.info(f"Wake: ACL link up, holding {self._WAKE_HOLD_SECS:.0f}s "
                         "for phone to initiate HID reconnect...")
+            self._probe_peer_hid(bdaddr, peer_mac)
             deadline = time.time() + self._WAKE_HOLD_SECS
             while time.time() < deadline and not self.connected:
                 time.sleep(0.25)
@@ -439,6 +440,27 @@ class BluetoothHID:
                 s.close()
             except OSError:
                 pass
+
+    def _probe_peer_hid(self, local_bdaddr: str, peer_mac: str):
+        """Diagnostic: does the phone listen on PSM 17 (device-initiated HID
+        reconnect)? If yes, we can build a proper PC-initiated HID flow."""
+        for psm, name in [(17, 'HID-Control'), (19, 'HID-Interrupt')]:
+            s = socket.socket(socket.AF_BLUETOOTH,
+                              socket.SOCK_SEQPACKET,
+                              socket.BTPROTO_L2CAP)
+            try:
+                s.bind((local_bdaddr, 0))
+                s.settimeout(3.0)
+                s.connect((peer_mac, psm))
+                logger.info(f"Wake probe: peer ACCEPTED PSM {psm} ({name}) "
+                            "— phone listens for device-initiated reconnect")
+            except OSError as e:
+                logger.info(f"Wake probe: peer PSM {psm} ({name}) refused: {e}")
+            finally:
+                try:
+                    s.close()
+                except OSError:
+                    pass
 
     def close(self):
         self.connected = False

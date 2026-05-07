@@ -51,8 +51,8 @@ def _build_sdp_xml(device_name: str) -> str:
   <attribute id="0x0201"><uint8  value="0x40"/></attribute>
   <attribute id="0x0202"><uint8  value="0x00"/></attribute>
   <attribute id="0x0203"><uint8  value="0x00"/></attribute>
-  <attribute id="0x0204"><boolean value="false"/></attribute>
-  <attribute id="0x0205"><boolean value="false"/></attribute>
+  <attribute id="0x0204"><boolean value="true"/></attribute>
+  <attribute id="0x0205"><boolean value="true"/></attribute>
   <attribute id="0x0206">
     <sequence>
       <sequence>

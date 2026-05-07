@@ -49,8 +49,6 @@ class InputMonitor:
 
         keyname = config.get('toggle_key', 'KEY_PAUSE')
         self._toggle_keycode = getattr(ecodes, keyname, ecodes.KEY_PAUSE)
-        wakename = config.get('wake_key', 'KEY_SCROLLLOCK')
-        self._wake_keycode = getattr(ecodes, wakename, ecodes.KEY_SCROLLLOCK)
 
         self._init_x11()
 
@@ -122,15 +120,7 @@ class InputMonitor:
         except Exception as e:
             logger.warning(f"XGrabKey failed: {e}")
 
-        wake_kc = self._wake_keycode + 8
-        try:
-            self._poll_root.grab_key(wake_kc, X.AnyModifier, True,
-                                     X.GrabModeAsync, X.GrabModeAsync)
-            self._poll_display.flush()
-            wakename = self._config.get('wake_key', 'KEY_SCROLLLOCK')
-            logger.info(f"Wake hotkey: {wakename} (X11 keycode {wake_kc})")
-        except Exception as e:
-            logger.warning(f"XGrabKey wake failed: {e}")
+        logger.info(f"Wake hotkey: Ctrl+{self._config.get('toggle_key','KEY_PAUSE')}")
 
     def _check_hotkey_events(self):
         from Xlib import X
@@ -140,23 +130,23 @@ class InputMonitor:
                 if ev.type != X.KeyPress:
                     continue
                 kc = ev.detail - 8
-                logger.info(f"X11 KeyPress: detail={ev.detail} evdev={kc} "
-                            f"(wake={self._wake_keycode}, toggle={self._toggle_keycode})")
-                if kc == self._toggle_keycode:
-                    if time.time() < self._ignore_toggle_until:
-                        continue
-                    self._poll_display.ungrab_keyboard(X.CurrentTime)
-                    self._poll_display.flush()
-                    if self.remote_mode:
-                        self._leave_remote()
-                    else:
-                        self._enter_remote()
-                elif kc == self._wake_keycode:
+                if kc != self._toggle_keycode:
+                    continue
+                if ev.state & X.ControlMask:
                     if self.wake_callback:
                         try:
                             self.wake_callback()
                         except Exception as e:
                             logger.warning(f"wake_callback: {e}")
+                    continue
+                if time.time() < self._ignore_toggle_until:
+                    continue
+                self._poll_display.ungrab_keyboard(X.CurrentTime)
+                self._poll_display.flush()
+                if self.remote_mode:
+                    self._leave_remote()
+                else:
+                    self._enter_remote()
         except Exception:
             pass
 

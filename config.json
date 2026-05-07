@@ -7,5 +7,6 @@
   "mouse_speed_multiplier": 1.0,
   "clipboard_sync": true,
   "toggle_key": "KEY_PAUSE",
-  "mouse_return": false
+  "mouse_return": false,
+  "phone_mac": "0C:32:3A:76:24:48"
 }

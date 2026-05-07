@@ -40,7 +40,6 @@ class InputMonitor:
         self._on_leave_remote = on_leave_remote
 
         self.event_callback: Optional[Callable] = None
-        self.wake_callback: Optional[Callable] = None
         self.remote_mode = False
         self._virt_x = 0
         self._virt_y = 0
@@ -60,7 +59,7 @@ class InputMonitor:
         logger.info(f"evdev: {len(keyboards)} keyboard(s), {len(mice)} mouse/mice")
 
         self._running = False
-        self._poll_thread: Optional[threading.Thread] = None
+        self._edge_thread: Optional[threading.Thread] = None
         self._event_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------ #
@@ -120,33 +119,20 @@ class InputMonitor:
         except Exception as e:
             logger.warning(f"XGrabKey failed: {e}")
 
-        logger.info(f"Wake hotkey: Ctrl+{self._config.get('toggle_key','KEY_PAUSE')}")
-
     def _check_hotkey_events(self):
         from Xlib import X
         try:
             while self._poll_display.pending_events():
                 ev = self._poll_display.next_event()
-                if ev.type != X.KeyPress:
-                    continue
-                kc = ev.detail - 8
-                if kc != self._toggle_keycode:
-                    continue
-                if ev.state & X.ControlMask:
-                    if self.wake_callback:
-                        try:
-                            self.wake_callback()
-                        except Exception as e:
-                            logger.warning(f"wake_callback: {e}")
-                    continue
-                if time.time() < self._ignore_toggle_until:
-                    continue
-                self._poll_display.ungrab_keyboard(X.CurrentTime)
-                self._poll_display.flush()
-                if self.remote_mode:
-                    self._leave_remote()
-                else:
-                    self._enter_remote()
+                if ev.type == X.KeyPress and ev.detail - 8 == self._toggle_keycode:
+                    if time.time() < self._ignore_toggle_until:
+                        continue
+                    self._poll_display.ungrab_keyboard(X.CurrentTime)
+                    self._poll_display.flush()
+                    if self.remote_mode:
+                        self._leave_remote()
+                    else:
+                        self._enter_remote()
         except Exception:
             pass
 
@@ -269,32 +255,37 @@ class InputMonitor:
     # ------------------------------------------------------------------ #
     # Thread loops
 
-    def start_polling(self):
-        """Start X11 hotkey/edge polling. Hotkeys (toggle, wake) work even
-        before the BT link is up. Should be called once at server boot."""
-        if self._poll_thread and self._poll_thread.is_alive():
-            return
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop, daemon=True, name="x11-poll")
-        self._poll_thread.start()
-
     def start(self):
-        # poll thread keeps running across reconnects; only evdev capture
-        # is gated on BT link being up
         self._running = True
+        self._register_toggle_hotkey()
+        self._edge_thread = threading.Thread(
+            target=self._edge_loop, daemon=True, name="edge-detect")
         self._event_thread = threading.Thread(
             target=self._evdev_loop, daemon=True, name="evdev-reader")
+        self._edge_thread.start()
         self._event_thread.start()
 
     def stop(self):
         self._running = False
         if self.remote_mode:
             self._leave_remote()
+        try:
+            from Xlib import X
+            keycode = self._toggle_keycode + 8
+            self._poll_root.ungrab_key(keycode, X.AnyModifier)
+            try:
+                self._poll_display.change_keyboard_control(
+                    key=keycode, auto_repeat_mode=X.AutoRepeatModeDefault)
+            except Exception:
+                pass
+            self._poll_display.flush()
+        except Exception:
+            pass
 
-    def _poll_loop(self):
-        while True:
+    def _edge_loop(self):
+        while self._running:
             self._check_hotkey_events()
-            if self._running and not self.remote_mode:
+            if not self.remote_mode:
                 try:
                     x, y = self._mouse_pos()
                     if self._at_edge(x, y):

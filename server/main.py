@@ -193,14 +193,9 @@ def main():
 
     monitor = InputMonitor(config, on_enter_remote, on_leave_remote)
 
-    phone_mac = config.get('phone_mac', '')
-    def on_wake_key():
-        if not phone_mac:
-            logger.warning("Wake key pressed but no phone_mac in config.json")
-            return
-        threading.Thread(target=hid.try_wake, args=(phone_mac,),
-                         daemon=True, name="wake").start()
-    monitor.wake_callback = on_wake_key
+    # carry sub-pixel residuals across REL events when speed != 1.0,
+    # otherwise int() truncation drops fractional motion (visible at speed<1)
+    speed_residual = {ecodes.REL_X: 0.0, ecodes.REL_Y: 0.0}
 
     def on_event(event):
         et = event.type
@@ -217,7 +212,9 @@ def main():
             code = event.code
             value = event.value
             if speed != 1.0 and code in _REL_XY:
-                value = int(value * speed)
+                scaled = value * speed + speed_residual[code]
+                value = int(scaled)
+                speed_residual[code] = scaled - value
             state.handle_rel(code, value)
 
         elif et == ecodes.EV_SYN:
@@ -236,7 +233,6 @@ def main():
     logger.info("Setting up Bluetooth HID peripheral...")
     hid.setup()
     sender.start()
-    monitor.start_polling()
 
     clip = ClipboardSync()
     if config.get('clipboard_sync', True):
@@ -256,7 +252,7 @@ def main():
 
             logger.info(f"Android connected! "
                         f"Move mouse to the {config.get('edge','right')} edge "
-                        "to switch control. Press Scroll Lock to return.")
+                        f"to switch control. Press {config.get('toggle_key','KEY_PAUSE')} to return.")
             monitor.start()
 
             # wait until BT drops

@@ -391,47 +391,6 @@ class BluetoothHID:
             logger.warning(f"BT send error: {e}")
             self.connected = False
 
-    _WAKE_DEBOUNCE_SECS = 3.0
-
-    def try_wake(self, peer_mac: str):
-        """Page peer via SDP to bring up the ACL link.
-
-        NOTE: Android HID Host on this phone accepts outgoing PSM 17/19
-        L2CAP connections but does not register them as active input,
-        so PC-initiated HID reconnect doesn't actually deliver keystrokes.
-        Wake is kept as a reachability probe / future hook only — the
-        actual HID reconnect still has to come from the phone side.
-        """
-        now = time.time()
-        if self.connected:
-            logger.info("Wake: already connected, skipping")
-            return
-        if now - getattr(self, '_last_wake', 0) < self._WAKE_DEBOUNCE_SECS:
-            return
-        self._last_wake = now
-
-        bdaddr = self._get_local_bdaddr()
-        if not bdaddr:
-            logger.warning("Wake: no local BD addr")
-            return
-        s = socket.socket(socket.AF_BLUETOOTH,
-                          socket.SOCK_SEQPACKET,
-                          socket.BTPROTO_L2CAP)
-        try:
-            s.bind((bdaddr, 0))
-            s.settimeout(8.0)
-            logger.info(f"Wake: paging {peer_mac} via SDP...")
-            s.connect((peer_mac, 1))
-            logger.info(f"Wake: ACL link up to {peer_mac} "
-                        "(phone must initiate HID reconnect itself)")
-        except OSError as e:
-            logger.warning(f"Wake: paging {peer_mac} failed: {e}")
-        finally:
-            try:
-                s.close()
-            except OSError:
-                pass
-
     def close(self):
         self.connected = False
         for s in [self._ctrl_client, self._intr_client,

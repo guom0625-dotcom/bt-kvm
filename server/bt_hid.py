@@ -327,6 +327,13 @@ class BluetoothHID:
         subprocess.run(['hciconfig', self._adapter, 'piscan'], capture_output=True)
         subprocess.run(['hciconfig', self._adapter, 'class', '0x002540'],
                        capture_output=True)
+        # Close any server sockets left open by a previous failed listen() call.
+        # Without this, each failed call leaks fds and eventually hits EMFILE.
+        for s in [self._ctrl_server, self._intr_server]:
+            if s:
+                try: s.close()
+                except OSError: pass
+        self._ctrl_server = self._intr_server = None
         logger.info(f"Binding L2CAP to {bdaddr}")
         self._ctrl_server = self._make_l2cap_socket(P_CTRL, bdaddr)
         self._intr_server = self._make_l2cap_socket(P_INTR, bdaddr)

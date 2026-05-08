@@ -72,6 +72,8 @@ class InputMonitor:
         self._keyboards = keyboards
         self._mice = mice
         self._dev_lock = threading.Lock()
+        # paths confirmed to be non-input; skip in watcher to limit fd pressure
+        self._not_input_paths: set = set()
         logger.info(f"evdev: {len(keyboards)} keyboard(s), {len(mice)} mouse/mice")
 
         self._running = False
@@ -306,13 +308,16 @@ class InputMonitor:
             try:
                 with self._dev_lock:
                     existing = {d.path for d in self._keyboards + self._mice}
+                # Skip paths we already know are non-input (e.g. power buttons,
+                # touchpads without REL_X) so we don't open dozens of fds on
+                # every watcher tick — only inspect truly new paths.
+                candidates = set(list_devices()) - existing - self._not_input_paths
                 new_kbds, new_mice = [], []
-                for path in list_devices():
-                    if path in existing:
-                        continue
+                for path in candidates:
                     try:
                         dev = InputDevice(path)
                     except Exception:
+                        self._not_input_paths.add(path)
                         continue
                     kind = _classify(dev)
                     if kind == 'keyboard':
@@ -320,6 +325,7 @@ class InputMonitor:
                     elif kind == 'mouse':
                         new_mice.append(dev)
                     else:
+                        self._not_input_paths.add(path)
                         try: dev.close()
                         except Exception: pass
                 if new_kbds or new_mice:

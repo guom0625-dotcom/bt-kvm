@@ -314,6 +314,11 @@ class BluetoothHID:
         """Block until Android connects on both HID channels."""
         bdaddr = self._get_local_bdaddr()
         if not bdaddr:
+            logger.warning(f"{self._adapter} BD address unavailable, bringing adapter up...")
+            subprocess.run(['hciconfig', self._adapter, 'up'], capture_output=True)
+            time.sleep(1.5)
+            bdaddr = self._get_local_bdaddr()
+        if not bdaddr:
             raise OSError(
                 f"Could not get {self._adapter} BD address — is the adapter up?"
             )

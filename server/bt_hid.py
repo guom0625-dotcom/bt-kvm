@@ -322,6 +322,11 @@ class BluetoothHID:
             raise OSError(
                 f"Could not get {self._adapter} BD address — is the adapter up?"
             )
+        # Restore discoverable + CoD each listen() call — bluetoothd may reset
+        # these when the adapter cycles power after a connection drop.
+        subprocess.run(['hciconfig', self._adapter, 'piscan'], capture_output=True)
+        subprocess.run(['hciconfig', self._adapter, 'class', '0x002540'],
+                       capture_output=True)
         logger.info(f"Binding L2CAP to {bdaddr}")
         self._ctrl_server = self._make_l2cap_socket(P_CTRL, bdaddr)
         self._intr_server = self._make_l2cap_socket(P_INTR, bdaddr)
